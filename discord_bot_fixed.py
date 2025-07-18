@@ -305,6 +305,8 @@ async def add_site(ctx, url=None, name=None, selector=None):
     """Ajoute un site à surveiller pour des parties LoL"""
     if not url:
         await ctx.send("❌ Veuillez spécifier une URL !\nExemple: `!addsite https://example.com \"Mon Site\" \".game-link\"`")
+        await ctx.message.delete()
+        await message.add_reaction('🔗')
         return
 
     if not name:
@@ -335,6 +337,7 @@ async def remove_site(ctx, url=None):
     """Supprime un site de la surveillance"""
     if not url:
         await ctx.send("❌ Veuillez spécifier l'URL du site à supprimer !")
+        await ctx.message.delete()
         return
 
     channel_id = ctx.channel.id
