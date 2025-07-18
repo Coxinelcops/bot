@@ -10,52 +10,41 @@ from threading import Thread
 from flask import Flask
 from bs4 import BeautifulSoup
 import re
-
 # === Flask (pour Render) ===
 app = Flask('')
-
 @app.route('/')
 def home():
     return "Bot Discord actif."
-
 def run_flask():
     app.run(host='0.0.0.0', port=8080)
-
 # === Logger ===
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
 # === Bot Discord ===
 intents = discord.Intents.default()
 intents.message_content = True
 intents.guilds = True
 intents.reactions = True
-
 bot = commands.Bot(command_prefix='!', intents=intents)
 bot.remove_command('help')  # Supprime la commande help par défaut pour ajouter la tienne
-
 # === Twitch credentials ===
 TWITCH_CLIENT_ID = "tejcc6qy12vbclkl2qige9szpfoher"
 TWITCH_CLIENT_SECRET = "18jywkay5xbbo5d2028f4fxwyf0txk"
-
 # === Stockage des données ===
 streamers = {}
 stream_messages = {}
 ping_roles = {}
 notification_channels = {}
 reaction_role_messages = {}
-
 # === Nouveaux dictionnaires pour OP.GG ===
 lol_players = {}  # {channel_id: [list of players]}
 lol_game_messages = {}  # {channel_id_playername: message_id}
 lol_ping_roles = {}  # {channel_id: role_id}
-
 class TwitchAPI:
     def __init__(self):
         self.token = None
         self.headers = {}
         self.token_expires_at = None
-
     async def get_token(self):
         url = "https://id.twitch.tv/oauth2/token"
         params = {
@@ -63,7 +52,6 @@ class TwitchAPI:
             'client_secret': TWITCH_CLIENT_SECRET,
             'grant_type': 'client_credentials'
         }
-        try:
             async with aiohttp.ClientSession() as session:
                 async with session.post(url, params=params) as response:
                     if response.status == 200:
@@ -79,23 +67,17 @@ class TwitchAPI:
                     else:
                         logger.error(f"Erreur lors de l'obtention du token Twitch: {response.status}")
                         return False
-        except Exception as e:
             logger.error(f"Exception lors de l'obtention du token Twitch: {e}")
             return False
-
     async def ensure_valid_token(self):
         if not self.token or (self.token_expires_at and datetime.now(UTC).timestamp() >= self.token_expires_at - 300):
             await self.get_token()
-
     async def get_streams(self, usernames):
         if not usernames:
             return []
-
         await self.ensure_valid_token()
         url = "https://api.twitch.tv/helix/streams"
         params = {'user_login': usernames}
-
-        try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, headers=self.headers, params=params) as response:
                     if response.status == 200:
@@ -111,13 +93,10 @@ class TwitchAPI:
         except Exception as e:
             logger.error(f"Exception lors de la récupération des streams: {e}")
             return []
-
     async def get_user_info(self, username):
         await self.ensure_valid_token()
         url = "https://api.twitch.tv/helix/users"
         params = {'login': username}
-
-        try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, headers=self.headers, params=params) as response:
                     if response.status == 200:
@@ -133,7 +112,6 @@ class TwitchAPI:
         except Exception as e:
             logger.error(f"Exception lors de la récupération de l'utilisateur: {e}")
             return None
-
 # === Classe pour OP.GG ===
 class OpGGAPI:
     def __init__(self):
@@ -141,22 +119,18 @@ class OpGGAPI:
         self.headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         }
-
     async def get_session(self):
         if not self.session:
             self.session = aiohttp.ClientSession(headers=self.headers)
         return self.session
-
     async def close_session(self):
         if self.session:
             await self.session.close()
             self.session = None
-
     async def check_player_ingame(self, summoner_name, region='euw'):
         """Vérifie si un joueur est en game sur op.gg"""
         try:
             session = await self.get_session()
-            
             # Nettoyer le nom du joueur
             clean_name = summoner_name.replace(' ', '%20')
             url = f"https://op.gg/summoners/{region}/{clean_name}"
@@ -190,7 +164,6 @@ class OpGGAPI:
         except Exception as e:
             logger.error(f"Erreur lors de la vérification de {summoner_name}: {e}")
             return None
-
     async def extract_game_info(self, html, summoner_name):
         """Extrait les informations de la partie en cours"""
         try:
@@ -227,7 +200,6 @@ class OpGGAPI:
                 'rank': 'Inconnu',
                 'spectate_url': f"https://op.gg/summoners/euw/{summoner_name.replace(' ', '%20')}"
             }
-
     async def validate_summoner(self, summoner_name, region='euw'):
         """Valide qu'un nom d'invocateur existe"""
         try:
@@ -245,11 +217,8 @@ class OpGGAPI:
         except Exception as e:
             logger.error(f"Erreur lors de la validation de {summoner_name}: {e}")
             return False
-
 twitch_api = TwitchAPI()
 opgg_api = OpGGAPI()
-
-@bot.event
 async def on_ready():
     print(f'{bot.user} est connecté et prêt !')
     await twitch_api.get_token()
@@ -257,29 +226,22 @@ async def on_ready():
         check_streams.start()
     if not check_lol_games.is_running():
         check_lol_games.start()
-
 @tasks.loop(minutes=1)
 async def check_streams():
-    try:
         for channel_id, streamer_list in streamers.items():
             if not streamer_list:
                 continue
-
             channel = bot.get_channel(channel_id)
             if not channel:
                 logger.warning(f"Channel {channel_id} non trouvé")
                 continue
-
             streams = await twitch_api.get_streams(streamer_list)
             currently_live = {stream['user_login'].lower() for stream in streams}
-
             for stream in streams:
                 username = stream['user_login'].lower()
                 message_key = f"{channel_id}_{username}"
-
                 if message_key not in stream_messages:
                     await send_stream_notification(channel, stream)
-
             to_remove = []
             for message_key, message_id in stream_messages.items():
                 if message_key.startswith(f"{channel_id}_"):
@@ -297,28 +259,20 @@ async def check_streams():
                         except Exception as e:
                             logger.error(f"Erreur lors de la suppression du message: {e}")
                             to_remove.append(message_key)
-
             for message_key in to_remove:
                 stream_messages.pop(message_key, None)
-
-    except Exception as e:
         logger.error(f"Erreur dans check_streams: {e}")
-
 @tasks.loop(minutes=2)  # Vérifier toutes les 2 minutes pour éviter de spam op.gg
 async def check_lol_games():
     """Vérifie les parties LoL en cours"""
-    try:
         for channel_id, player_list in lol_players.items():
             if not player_list:
                 continue
-
             channel = bot.get_channel(channel_id)
             if not channel:
                 logger.warning(f"Channel {channel_id} non trouvé")
                 continue
-
             currently_ingame = set()
-
             for player in player_list:
                 game_info = await opgg_api.check_player_ingame(player)
                 if game_info:
@@ -327,7 +281,6 @@ async def check_lol_games():
                     
                     if message_key not in lol_game_messages:
                         await send_lol_game_notification(channel, game_info)
-
             # Supprimer les messages des parties terminées
             to_remove = []
             for message_key, message_id in lol_game_messages.items():
@@ -346,28 +299,22 @@ async def check_lol_games():
                         except Exception as e:
                             logger.error(f"Erreur lors de la suppression du message: {e}")
                             to_remove.append(message_key)
-
             for message_key in to_remove:
                 lol_game_messages.pop(message_key, None)
-
     except Exception as e:
         logger.error(f"Erreur dans check_lol_games: {e}")
-
 @check_streams.before_loop
 async def before_check_streams():
     await bot.wait_until_ready()
-
 @check_lol_games.before_loop
 async def before_check_lol_games():
     await bot.wait_until_ready()
-
 async def send_stream_notification(channel, stream):
     try:
         username = stream['user_login']
         game_name = stream['game_name'] or "Pas de catégorie"
         viewer_count = stream['viewer_count']
         title = stream['title'] or "Pas de titre"
-
         embed = discord.Embed(
             title=f"🔴 {stream['user_name']} est en live !",
             description=f"**{title}**",
@@ -377,30 +324,22 @@ async def send_stream_notification(channel, stream):
         embed.add_field(name="🎮 Catégorie", value=game_name, inline=True)
         embed.add_field(name="👥 Viewers", value=f"{viewer_count:,}", inline=True)
         embed.add_field(name="🔗 Lien", value=f"[Regarder le stream](https://twitch.tv/{username})", inline=False)
-
         if stream.get('thumbnail_url'):
             thumbnail = stream['thumbnail_url'].replace('{width}', '320').replace('{height}', '180')
             embed.set_image(url=thumbnail)
-
         embed.timestamp = datetime.now(UTC)
-
         content = ""
         if channel.id in ping_roles:
             role = channel.guild.get_role(ping_roles[channel.id])
             if role:
                 content = f"{role.mention} "
-
         message = await channel.send(content=content, embed=embed)
         message_key = f"{channel.id}_{username.lower()}"
         stream_messages[message_key] = message.id
-
         logger.info(f"Notification envoyée pour {username} dans {channel.name}")
-
-    except discord.Forbidden:
         logger.error(f"Pas de permission pour envoyer un message dans {channel.name}")
     except Exception as e:
         logger.error(f"Erreur lors de l'envoi de la notification: {e}")
-
 async def send_lol_game_notification(channel, game_info):
     """Envoie une notification pour une partie LoL"""
     try:
@@ -408,7 +347,6 @@ async def send_lol_game_notification(channel, game_info):
         champion = game_info['champion']
         rank = game_info['rank']
         spectate_url = game_info['spectate_url']
-
         embed = discord.Embed(
             title=f"🎮 {player} est en partie !",
             description=f"**{champion}** • {rank}",
@@ -420,28 +358,21 @@ async def send_lol_game_notification(channel, game_info):
         embed.add_field(name="👁️ Spectate", value=f"[Regarder la partie]({spectate_url})", inline=False)
         embed.timestamp = datetime.now(UTC)
         embed.set_footer(text="League of Legends • OP.GG")
-
         content = ""
         if channel.id in lol_ping_roles:
             role = channel.guild.get_role(lol_ping_roles[channel.id])
             if role:
                 content = f"{role.mention} "
-
         message = await channel.send(content=content, embed=embed)
-        
         # Ajouter une réaction pour accès rapide
         await message.add_reaction("👁️")
-        
         message_key = f"{channel.id}_{player.lower()}"
         lol_game_messages[message_key] = message.id
-
         logger.info(f"Notification LoL envoyée pour {player} dans {channel.name}")
-
     except discord.Forbidden:
         logger.error(f"Pas de permission pour envoyer un message dans {channel.name}")
     except Exception as e:
         logger.error(f"Erreur lors de l'envoi de la notification LoL: {e}")
-
 async def delete_command_messages(ctx, response_message=None):
     """Supprime le message de commande et la réponse du bot après un délai"""
     try:
@@ -451,11 +382,87 @@ async def delete_command_messages(ctx, response_message=None):
         if response_message:
             await response_message.delete()
     except discord.NotFound:
-        pass
     except discord.Forbidden:
         pass
-
 # === Commandes LoL ===
+        try:
+
+
+
+
+
+# === Commandes Twitch existantes ===
+
+
+
+
+
+
+
+
+
+
+        
+            
+
+
+
+
+
+
+
+
+
+
+        try:
+
+
+
+
+
+
+
+
+
+
+    try:
+        pass
+
+
+
+
+
+        
+
+
+
+
+        try:
+        except Exception as e:
+
+
+
+
+
+
+
+
+    try:
+    except discord.Forbidden:
+    except Exception as e:
+
+
+
+
+
+@bot.event
+
+# === Lancement ===
+
+# === Commandes ===
+@bot.command(name='addlol')
+@commands.has_permissions(manage_channels=True)
+async def add_lol_player(ctx, summoner_name=None, region='euw'):
     """Ajoute un joueur LoL à surveiller"""
     if summoner_name is None:
         response = await ctx.send("❌ Veuillez spécifier un nom d'invocateur !\nExemple: `!addlol Faker`")
@@ -488,6 +495,10 @@ async def delete_command_messages(ctx, response_message=None):
     response = await ctx.send(f"✅ {summoner_name} ajouté à la liste des joueurs LoL surveillés !")
     asyncio.create_task(delete_command_messages(ctx, response))
 
+
+@bot.command(name='removelol')
+@commands.has_permissions(manage_channels=True)
+async def remove_lol_player(ctx, summoner_name=None):
     """Retire un joueur LoL de la surveillance"""
     if summoner_name is None:
         response = await ctx.send("❌ Veuillez spécifier un nom d'invocateur !")
@@ -530,6 +541,9 @@ async def delete_command_messages(ctx, response_message=None):
     response = await ctx.send(f"✅ {player_to_remove} retiré de la liste des joueurs LoL surveillés !")
     asyncio.create_task(delete_command_messages(ctx, response))
 
+
+@bot.command(name='listlol')
+async def list_lol_players(ctx):
     """Affiche la liste des joueurs LoL surveillés"""
     channel_id = ctx.channel.id
 
@@ -545,6 +559,10 @@ async def delete_command_messages(ctx, response_message=None):
     embed.set_footer(text="League of Legends • OP.GG")
     await ctx.send(embed=embed)
 
+
+@bot.command(name='lolping')
+@commands.has_permissions(manage_roles=True)
+async def set_lol_ping_role(ctx, role: discord.Role = None):
     """Définit le rôle à ping pour les notifications LoL"""
     channel_id = ctx.channel.id
 
@@ -557,7 +575,10 @@ async def delete_command_messages(ctx, response_message=None):
     lol_ping_roles[channel_id] = role.id
     await ctx.send(f"✅ Le rôle {role.mention} sera ping lors des notifications LoL !")
 
-# === Commandes Twitch existantes ===
+
+@bot.command(name='addstreamer')
+@commands.has_permissions(manage_channels=True)
+async def add_streamer(ctx, username=None):
     if username is None:
         response = await ctx.send("❌ Veuillez spécifier un nom d'utilisateur Twitch !")
         asyncio.create_task(delete_command_messages(ctx, response))
@@ -589,6 +610,10 @@ async def delete_command_messages(ctx, response_message=None):
     response = await ctx.send(f"✅ {username} ajouté à la liste des streamers surveillés !")
     asyncio.create_task(delete_command_messages(ctx, response))
 
+
+@bot.command(name='addstreamers')
+@commands.has_permissions(manage_channels=True)
+async def add_streamers(ctx, *usernames):
     if not usernames:
         response = await ctx.send("❌ Veuillez spécifier au moins un nom d'utilisateur Twitch !\nExemple: `!addstreamers streamer1 streamer2 streamer3`")
         asyncio.create_task(delete_command_messages(ctx, response))
@@ -637,6 +662,10 @@ async def delete_command_messages(ctx, response_message=None):
     response = await ctx.send("\n".join(message_parts))
     asyncio.create_task(delete_command_messages(ctx, response))
 
+
+@bot.command(name='removestreamer')
+@commands.has_permissions(manage_channels=True)
+async def remove_streamer(ctx, username=None):
     if username is None:
         response = await ctx.send("❌ Veuillez spécifier un nom d'utilisateur Twitch !")
         asyncio.create_task(delete_command_messages(ctx, response))
@@ -665,6 +694,9 @@ async def delete_command_messages(ctx, response_message=None):
     response = await ctx.send(f"✅ {username} retiré de la liste des streamers surveillés !")
     asyncio.create_task(delete_command_messages(ctx, response))
 
+
+@bot.command(name='liststreamer')
+async def list_streamers(ctx):
     channel_id = ctx.channel.id
 
     if channel_id not in streamers or not streamers[channel_id]:
@@ -678,6 +710,10 @@ async def delete_command_messages(ctx, response_message=None):
     )
     await ctx.send(embed=embed)
 
+
+@bot.command(name='pingrole')
+@commands.has_permissions(manage_roles=True)
+async def set_ping_role(ctx, role: discord.Role = None):
     channel_id = ctx.channel.id
 
     if role is None:
@@ -689,6 +725,10 @@ async def delete_command_messages(ctx, response_message=None):
     ping_roles[channel_id] = role.id
     await ctx.send(f"✅ Le rôle {role.mention} sera ping lors des notifications Twitch !")
 
+
+@bot.command(name='reactionrole')
+@commands.has_permissions(manage_roles=True)
+async def create_reaction_role(ctx, role: discord.Role = None, emoji: str = "🔔"):
     """Crée un message sur lequel les utilisateurs peuvent réagir pour obtenir un rôle"""
     if role is None:
         await ctx.send("❌ Veuillez spécifier un rôle !\nExemple: `!reactionrole @Notifications 🔔`")
@@ -814,6 +854,9 @@ async def on_reaction_remove(reaction, user):
     except Exception as e:
         logger.error(f"Erreur lors du retrait du rôle: {e}")
 
+
+@bot.command(name='help')
+async def bot_help(ctx):
     """Affiche toutes les commandes disponibles"""
     embed = discord.Embed(
         title="🤖 Aide du Bot Multi-Fonctions",
@@ -870,6 +913,9 @@ async def on_reaction_remove(reaction, user):
     embed.set_footer(text="Bot créé pour surveiller Twitch et League of Legends")
     await ctx.send(embed=embed)
 
+
+@bot.command(name='streamhelp')
+async def stream_help(ctx):
     """Aide spécifique pour les commandes Twitch (rétrocompatibilité)"""
     embed = discord.Embed(
         title="📺 Aide Twitch",
@@ -884,6 +930,9 @@ async def on_reaction_remove(reaction, user):
     embed.set_footer(text="Les commandes addstreamer et removestreamer s'auto-suppriment après 5 secondes")
     await ctx.send(embed=embed)
 
+
+@bot.command(name='lolhelp')
+async def lol_help(ctx):
     """Aide spécifique pour les commandes LoL"""
     embed = discord.Embed(
         title="🎮 Aide League of Legends",
@@ -932,55 +981,6 @@ async def on_disconnect():
         check_lol_games.cancel()
     await opgg_api.close_session()
 
-# === Lancement ===
-
-# === Commandes ===
-@bot.command(name='addlol')
-@commands.has_permissions(manage_channels=True)
-async def add_lol_player(ctx, summoner_name=None, region='euw'):
-
-@bot.command(name='removelol')
-@commands.has_permissions(manage_channels=True)
-async def remove_lol_player(ctx, summoner_name=None):
-
-@bot.command(name='listlol')
-async def list_lol_players(ctx):
-
-@bot.command(name='lolping')
-@commands.has_permissions(manage_roles=True)
-async def set_lol_ping_role(ctx, role: discord.Role = None):
-
-@bot.command(name='addstreamer')
-@commands.has_permissions(manage_channels=True)
-async def add_streamer(ctx, username=None):
-
-@bot.command(name='addstreamers')
-@commands.has_permissions(manage_channels=True)
-async def add_streamers(ctx, *usernames):
-
-@bot.command(name='removestreamer')
-@commands.has_permissions(manage_channels=True)
-async def remove_streamer(ctx, username=None):
-
-@bot.command(name='liststreamer')
-async def list_streamers(ctx):
-
-@bot.command(name='pingrole')
-@commands.has_permissions(manage_roles=True)
-async def set_ping_role(ctx, role: discord.Role = None):
-
-@bot.command(name='reactionrole')
-@commands.has_permissions(manage_roles=True)
-async def create_reaction_role(ctx, role: discord.Role = None, emoji: str = "🔔"):
-
-@bot.command(name='help')
-async def bot_help(ctx):
-
-@bot.command(name='streamhelp')
-async def stream_help(ctx):
-
-@bot.command(name='lolhelp')
-async def lol_help(ctx):
 
 if __name__ == "__main__":
     Thread(target=run_flask).start()
