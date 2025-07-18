@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 intents = discord.Intents.default()
 intents.message_content = True
 intents.guilds = True
+intents.reactions = True
 
 bot = commands.Bot(command_prefix='!', intents=intents)
 
@@ -38,6 +39,7 @@ streamers = {}
 stream_messages = {}
 ping_roles = {}
 notification_channels = {}
+reaction_role_messages = {}  # Nouveau: stockage des messages pour les rôles par réaction
 
 class TwitchAPI:
     def __init__(self):
@@ -222,47 +224,119 @@ async def send_stream_notification(channel, stream):
     except Exception as e:
         logger.error(f"Erreur lors de l'envoi de la notification: {e}")
 
+async def delete_command_messages(ctx, response_message=None):
+    """Supprime le message de commande et la réponse du bot après un délai"""
+    try:
+        await asyncio.sleep(5)  # Attendre 5 secondes
+        if ctx.message:
+            await ctx.message.delete()
+        if response_message:
+            await response_message.delete()
+    except discord.NotFound:
+        pass  # Le message a déjà été supprimé
+    except discord.Forbidden:
+        pass  # Pas de permission pour supprimer
+
 @bot.command(name='addstreamer')
 @commands.has_permissions(manage_channels=True)
 async def add_streamer(ctx, username=None):
     if username is None:
-        await ctx.send("❌ Veuillez spécifier un nom d'utilisateur Twitch !")
+        response = await ctx.send("❌ Veuillez spécifier un nom d'utilisateur Twitch !")
+        asyncio.create_task(delete_command_messages(ctx, response))
         return
 
     channel_id = ctx.channel.id
     username = username.lower().replace('@', '').strip()
 
     if not username:
-        await ctx.send("❌ Nom d'utilisateur invalide !")
+        response = await ctx.send("❌ Nom d'utilisateur invalide !")
+        asyncio.create_task(delete_command_messages(ctx, response))
         return
 
     if channel_id not in streamers:
         streamers[channel_id] = []
 
     if username in streamers[channel_id]:
-        await ctx.send(f"❌ {username} est déjà dans la liste !")
+        response = await ctx.send(f"❌ {username} est déjà dans la liste !")
+        asyncio.create_task(delete_command_messages(ctx, response))
         return
 
     user_info = await twitch_api.get_user_info(username)
     if not user_info:
-        await ctx.send(f"❌ Le streamer {username} n'existe pas sur Twitch !")
+        response = await ctx.send(f"❌ Le streamer {username} n'existe pas sur Twitch !")
+        asyncio.create_task(delete_command_messages(ctx, response))
         return
 
     streamers[channel_id].append(username)
-    await ctx.send(f"✅ {username} ajouté à la liste des streamers surveillés !")
+    response = await ctx.send(f"✅ {username} ajouté à la liste des streamers surveillés !")
+    asyncio.create_task(delete_command_messages(ctx, response))
+
+@bot.command(name='addstreamers')
+@commands.has_permissions(manage_channels=True)
+async def add_streamers(ctx, *usernames):
+    if not usernames:
+        response = await ctx.send("❌ Veuillez spécifier au moins un nom d'utilisateur Twitch !\nExemple: `!addstreamers streamer1 streamer2 streamer3`")
+        asyncio.create_task(delete_command_messages(ctx, response))
+        return
+
+    channel_id = ctx.channel.id
+    if channel_id not in streamers:
+        streamers[channel_id] = []
+
+    added_streamers = []
+    already_exists = []
+    invalid_streamers = []
+
+    for username in usernames:
+        username = username.lower().replace('@', '').strip()
+        
+        if not username:
+            continue
+            
+        if username in streamers[channel_id]:
+            already_exists.append(username)
+            continue
+
+        user_info = await twitch_api.get_user_info(username)
+        if not user_info:
+            invalid_streamers.append(username)
+            continue
+
+        streamers[channel_id].append(username)
+        added_streamers.append(username)
+
+    # Construire le message de réponse
+    message_parts = []
+    
+    if added_streamers:
+        message_parts.append(f"✅ **Streamers ajoutés:** {', '.join(added_streamers)}")
+    
+    if already_exists:
+        message_parts.append(f"⚠️ **Déjà dans la liste:** {', '.join(already_exists)}")
+    
+    if invalid_streamers:
+        message_parts.append(f"❌ **Streamers introuvables:** {', '.join(invalid_streamers)}")
+
+    if not message_parts:
+        message_parts.append("❌ Aucun streamer valide fourni !")
+
+    response = await ctx.send("\n".join(message_parts))
+    asyncio.create_task(delete_command_messages(ctx, response))
 
 @bot.command(name='removestreamer')
 @commands.has_permissions(manage_channels=True)
 async def remove_streamer(ctx, username=None):
     if username is None:
-        await ctx.send("❌ Veuillez spécifier un nom d'utilisateur Twitch !")
+        response = await ctx.send("❌ Veuillez spécifier un nom d'utilisateur Twitch !")
+        asyncio.create_task(delete_command_messages(ctx, response))
         return
 
     channel_id = ctx.channel.id
     username = username.lower().replace('@', '').strip()
 
     if channel_id not in streamers or username not in streamers[channel_id]:
-        await ctx.send(f"❌ {username} n'est pas dans la liste !")
+        response = await ctx.send(f"❌ {username} n'est pas dans la liste !")
+        asyncio.create_task(delete_command_messages(ctx, response))
         return
 
     streamers[channel_id].remove(username)
@@ -277,7 +351,8 @@ async def remove_streamer(ctx, username=None):
         finally:
             stream_messages.pop(message_key, None)
 
-    await ctx.send(f"✅ {username} retiré de la liste des streamers surveillés !")
+    response = await ctx.send(f"✅ {username} retiré de la liste des streamers surveillés !")
+    asyncio.create_task(delete_command_messages(ctx, response))
 
 @bot.command(name='liststreamer')
 async def list_streamers(ctx):
@@ -308,6 +383,115 @@ async def set_ping_role(ctx, role: discord.Role = None):
     ping_roles[channel_id] = role.id
     await ctx.send(f"✅ Le rôle {role.mention} sera ping lors des notifications de stream !")
 
+@bot.command(name='reactionrole')
+@commands.has_permissions(manage_roles=True)
+async def create_reaction_role(ctx, role: discord.Role = None, emoji: str = "🔔"):
+    """Crée un message sur lequel les utilisateurs peuvent réagir pour obtenir un rôle"""
+    if role is None:
+        await ctx.send("❌ Veuillez spécifier un rôle !\nExemple: `!reactionrole @Notifications 🔔`")
+        return
+
+    # Créer l'embed pour le message de réaction
+    embed = discord.Embed(
+        title="🎯 Rôle par Réaction",
+        description=f"Réagissez avec {emoji} pour obtenir le rôle **{role.name}**\n\nRéagissez à nouveau pour retirer le rôle.",
+        color=0x9146ff
+    )
+    embed.add_field(name="Rôle", value=role.mention, inline=True)
+    embed.add_field(name="Emoji", value=emoji, inline=True)
+    embed.set_footer(text="Système de rôles automatique")
+
+    # Supprimer le message de commande
+    try:
+        await ctx.message.delete()
+    except:
+        pass
+
+    # Envoyer le message et ajouter la réaction
+    message = await ctx.send(embed=embed)
+    await message.add_reaction(emoji)
+
+    # Stocker les informations pour le système de réaction
+    reaction_role_messages[message.id] = {
+        'role_id': role.id,
+        'emoji': emoji,
+        'guild_id': ctx.guild.id
+    }
+
+    logger.info(f"Message de réaction créé pour le rôle {role.name} avec l'emoji {emoji}")
+
+@bot.event
+async def on_reaction_add(reaction, user):
+    """Gère l'ajout de réactions pour donner des rôles"""
+    if user.bot:
+        return
+
+    message_id = reaction.message.id
+    if message_id not in reaction_role_messages:
+        return
+
+    role_data = reaction_role_messages[message_id]
+    
+    # Vérifier si c'est le bon emoji
+    if str(reaction.emoji) != role_data['emoji']:
+        return
+
+    # Récupérer le rôle et l'utilisateur
+    guild = bot.get_guild(role_data['guild_id'])
+    if not guild:
+        return
+
+    role = guild.get_role(role_data['role_id'])
+    member = guild.get_member(user.id)
+
+    if not role or not member:
+        return
+
+    # Ajouter le rôle
+    try:
+        await member.add_roles(role)
+        logger.info(f"Rôle {role.name} ajouté à {member.name}")
+    except discord.Forbidden:
+        logger.error(f"Pas de permission pour ajouter le rôle {role.name} à {member.name}")
+    except Exception as e:
+        logger.error(f"Erreur lors de l'ajout du rôle: {e}")
+
+@bot.event
+async def on_reaction_remove(reaction, user):
+    """Gère la suppression de réactions pour retirer des rôles"""
+    if user.bot:
+        return
+
+    message_id = reaction.message.id
+    if message_id not in reaction_role_messages:
+        return
+
+    role_data = reaction_role_messages[message_id]
+    
+    # Vérifier si c'est le bon emoji
+    if str(reaction.emoji) != role_data['emoji']:
+        return
+
+    # Récupérer le rôle et l'utilisateur
+    guild = bot.get_guild(role_data['guild_id'])
+    if not guild:
+        return
+
+    role = guild.get_role(role_data['role_id'])
+    member = guild.get_member(user.id)
+
+    if not role or not member:
+        return
+
+    # Retirer le rôle
+    try:
+        await member.remove_roles(role)
+        logger.info(f"Rôle {role.name} retiré de {member.name}")
+    except discord.Forbidden:
+        logger.error(f"Pas de permission pour retirer le rôle {role.name} de {member.name}")
+    except Exception as e:
+        logger.error(f"Erreur lors du retrait du rôle: {e}")
+
 @bot.command(name='streamhelp')
 async def stream_help(ctx):
     embed = discord.Embed(
@@ -316,19 +500,28 @@ async def stream_help(ctx):
         color=0x9146ff
     )
     embed.add_field(name="!addstreamer <username>", value="Ajouter un streamer à surveiller", inline=False)
+    embed.add_field(name="!addstreamers <user1> <user2> ...", value="Ajouter plusieurs streamers d'un coup", inline=False)
     embed.add_field(name="!removestreamer <username>", value="Retirer un streamer de la surveillance", inline=False)
     embed.add_field(name="!liststreamer", value="Afficher la liste des streamers surveillés", inline=False)
     embed.add_field(name="!pingrole [@role]", value="Définir le rôle à ping (sans rôle = désactiver)", inline=False)
+    embed.add_field(name="!reactionrole [@role] [emoji]", value="Créer un message pour obtenir un rôle par réaction", inline=False)
+    embed.set_footer(text="Les commandes addstreamer et removestreamer s'auto-suppriment après 5 secondes")
     await ctx.send(embed=embed)
 
 @bot.event
 async def on_command_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
-        await ctx.send("❌ Vous n'avez pas les permissions nécessaires pour cette commande !")
+        response = await ctx.send("❌ Vous n'avez pas les permissions nécessaires pour cette commande !")
+        if ctx.command.name in ['addstreamer', 'removestreamer', 'addstreamers']:
+            asyncio.create_task(delete_command_messages(ctx, response))
     elif isinstance(error, commands.BadArgument):
-        await ctx.send("❌ Argument invalide ! Utilisez `!streamhelp` pour voir les commandes.")
+        response = await ctx.send("❌ Argument invalide ! Utilisez `!streamhelp` pour voir les commandes.")
+        if ctx.command.name in ['addstreamer', 'removestreamer', 'addstreamers']:
+            asyncio.create_task(delete_command_messages(ctx, response))
     elif isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send("❌ Argument manquant ! Utilisez `!streamhelp` pour voir les commandes.")
+        response = await ctx.send("❌ Argument manquant ! Utilisez `!streamhelp` pour voir les commandes.")
+        if ctx.command.name in ['addstreamer', 'removestreamer', 'addstreamers']:
+            asyncio.create_task(delete_command_messages(ctx, response))
     else:
         logger.error(f"Erreur non gérée: {error}")
 
