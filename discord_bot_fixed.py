@@ -34,9 +34,10 @@ intents.reactions = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 # === Stockage des données ===
-monitored_sites = {}  # {channel_id: [{'url': str, 'selector': str, 'name': str}]}
+monitored_sites = {}  # {channel_id: [{'url': str, 'selector': str, 'name': str, 'command': str}]}
 active_games = {}  # {channel_id: {game_id: message_id}}
 reaction_game_messages = {}  # {message_id: {'url': str, 'game_info': dict}}
+command_links = {}  # {command: url} - Stockage des liens associés aux commandes
 
 class WebMonitor:
     def __init__(self):
@@ -138,6 +139,19 @@ class WebMonitor:
             logger.error(f"Erreur lors de l'extraction: {e}")
             return None
 
+async def delete_command_messages(ctx, response_message=None):
+    """Supprime le message de commande et la réponse du bot après un délai"""
+    try:
+        await asyncio.sleep(3)  # Attendre 3 secondes
+        if ctx.message:
+            await ctx.message.delete()
+        if response_message:
+            await response_message.delete()
+    except discord.NotFound:
+        pass  # Le message a déjà été supprimé
+    except discord.Forbidden:
+        pass  # Pas de permission pour supprimer
+
     async def close(self):
         if self.session:
             await self.session.close()
@@ -174,7 +188,7 @@ async def check_lol_games():
                     
                     # Vérifier si la partie est déjà affichée
                     if game_id not in active_games[channel_id]:
-                        await send_game_notification(channel, game, site['name'])
+                        await send_game_notification(channel, game, site['name'], site['command'])
 
         # Nettoyer les anciennes parties (plus de 30 minutes)
         await cleanup_old_games()
@@ -186,7 +200,7 @@ async def check_lol_games():
 async def before_check_lol_games():
     await bot.wait_until_ready()
 
-async def send_game_notification(channel, game, site_name):
+async def send_game_notification(channel, game, site_name, command):
     """Envoie une notification pour une nouvelle partie LoL"""
     try:
         embed = discord.Embed(
@@ -199,6 +213,7 @@ async def send_game_notification(channel, game, site_name):
         embed.add_field(name="🏆 Rang", value=game['rank'], inline=True)
         embed.add_field(name="📊 Niveau", value=game['level'], inline=True)
         embed.add_field(name="🌐 Source", value=site_name, inline=True)
+        embed.add_field(name="⌨️ Commande", value=f"`!{command}`", inline=True)
         
         embed.add_field(
             name="👁️ Observer", 
@@ -219,7 +234,8 @@ async def send_game_notification(channel, game, site_name):
         reaction_game_messages[message.id] = {
             'url': game['url'],
             'game_info': game,
-            'site_name': site_name
+            'site_name': site_name,
+            'command': command
         }
 
         logger.info(f"Notification envoyée pour une partie LoL dans {channel.name}")
@@ -272,6 +288,13 @@ async def on_reaction_add(reaction, user):
         return
 
     game_data = reaction_game_messages[message_id]
+    command = game_data['command']
+    
+    # Récupérer l'URL associée à la commande
+    if command in command_links:
+        final_url = command_links[command]
+    else:
+        final_url = game_data['url']  # Fallback sur l'URL originale
     
     try:
         # Envoyer le lien en DM
@@ -280,18 +303,19 @@ async def on_reaction_add(reaction, user):
             description=f"Voici le lien pour observer la partie :",
             color=0x0596AA
         )
-        embed.add_field(name="🔗 Lien", value=f"[Cliquez ici pour observer]({game_data['url']})", inline=False)
-        embed.add_field(name="📋 URL", value=game_data['url'], inline=False)
+        embed.add_field(name="🔗 Lien", value=f"[Cliquez ici pour observer]({final_url})", inline=False)
+        embed.add_field(name="📋 URL", value=final_url, inline=False)
+        embed.add_field(name="⌨️ Commande utilisée", value=f"`!{command}`", inline=False)
         embed.set_footer(text=f"Source: {game_data['site_name']}")
 
         await user.send(embed=embed)
-        logger.info(f"Lien envoyé à {user.name} pour observer une partie LoL")
+        logger.info(f"Lien envoyé à {user.name} pour observer une partie LoL avec la commande {command}")
 
     except discord.Forbidden:
         # Si on ne peut pas envoyer en DM, répondre dans le channel
         try:
             await reaction.message.channel.send(
-                f"{user.mention}, voici le lien pour observer: {game_data['url']}", 
+                f"{user.mention}, voici le lien pour observer: {final_url}", 
                 delete_after=30
             )
         except Exception as e:
@@ -301,14 +325,18 @@ async def on_reaction_add(reaction, user):
 
 @bot.command(name='addsite')
 @commands.has_permissions(manage_channels=True)
-async def add_site(ctx, url=None, name=None, selector=None):
+async def add_site(ctx, command=None, url=None, name=None, selector=None):
     """Ajoute un site à surveiller pour des parties LoL"""
-    if not url:
-        await ctx.send("❌ Veuillez spécifier une URL !\nExemple: `!addsite https://example.com \"Mon Site\" \".game-link\"`")
+    if not command or not url:
+        response = await ctx.send("❌ Veuillez spécifier une commande et une URL !\nExemple: `!addsite mycommand https://example.com \"Mon Site\" \".game-link\"`")
+        asyncio.create_task(delete_command_messages(ctx, response))
         return
 
+    # Nettoyer la commande (enlever ! si présent)
+    command = command.replace('!', '').strip()
+
     if not name:
-        name = url
+        name = command.title()
 
     channel_id = ctx.channel.id
     if channel_id not in monitored_sites:
@@ -316,39 +344,68 @@ async def add_site(ctx, url=None, name=None, selector=None):
 
     # Vérifier si le site existe déjà
     for site in monitored_sites[channel_id]:
-        if site['url'] == url:
-            await ctx.send(f"❌ Ce site est déjà surveillé !")
+        if site['url'] == url or site['command'] == command:
+            response = await ctx.send(f"❌ Ce site ou cette commande existe déjà !")
+            asyncio.create_task(delete_command_messages(ctx, response))
             return
 
     site_data = {
         'url': url,
         'name': name,
-        'selector': selector
+        'selector': selector,
+        'command': command
     }
 
     monitored_sites[channel_id].append(site_data)
-    await ctx.send(f"✅ Site ajouté à la surveillance : **{name}**")
+    response = await ctx.send(f"✅ Site ajouté à la surveillance : **{name}** (commande: `!{command}`)")
+    asyncio.create_task(delete_command_messages(ctx, response))
+
+@bot.command(name='addlink')
+@commands.has_permissions(manage_channels=True)
+async def add_link(ctx, command=None, url=None):
+    """Associe un lien direct à une commande"""
+    if not command or not url:
+        response = await ctx.send("❌ Veuillez spécifier une commande et une URL !\nExemple: `!addlink mycommand https://direct-link.com`")
+        asyncio.create_task(delete_command_messages(ctx, response))
+        return
+
+    # Nettoyer la commande (enlever ! si présent)
+    command = command.replace('!', '').strip()
+
+    command_links[command] = url
+    response = await ctx.send(f"✅ Lien direct ajouté pour la commande `!{command}` : {url}")
+    asyncio.create_task(delete_command_messages(ctx, response))
 
 @bot.command(name='removesite')
 @commands.has_permissions(manage_channels=True)
-async def remove_site(ctx, url=None):
-    """Supprime un site de la surveillance"""
-    if not url:
-        await ctx.send("❌ Veuillez spécifier l'URL du site à supprimer !")
+async def remove_site(ctx, identifier=None):
+    """Supprime un site de la surveillance (par URL ou commande)"""
+    if not identifier:
+        response = await ctx.send("❌ Veuillez spécifier l'URL ou la commande du site à supprimer !")
+        asyncio.create_task(delete_command_messages(ctx, response))
         return
+
+    # Nettoyer l'identifiant si c'est une commande
+    clean_identifier = identifier.replace('!', '').strip()
 
     channel_id = ctx.channel.id
     if channel_id not in monitored_sites:
-        await ctx.send("❌ Aucun site surveillé dans ce channel !")
+        response = await ctx.send("❌ Aucun site surveillé dans ce channel !")
+        asyncio.create_task(delete_command_messages(ctx, response))
         return
 
     for i, site in enumerate(monitored_sites[channel_id]):
-        if site['url'] == url:
+        if site['url'] == identifier or site['command'] == clean_identifier:
             removed_site = monitored_sites[channel_id].pop(i)
-            await ctx.send(f"✅ Site supprimé : **{removed_site['name']}**")
+            # Supprimer aussi le lien associé s'il existe
+            if removed_site['command'] in command_links:
+                del command_links[removed_site['command']]
+            response = await ctx.send(f"✅ Site supprimé : **{removed_site['name']}** (commande: `!{removed_site['command']}`)")
+            asyncio.create_task(delete_command_messages(ctx, response))
             return
 
-    await ctx.send("❌ Site non trouvé dans la liste !")
+    response = await ctx.send("❌ Site non trouvé dans la liste !")
+    asyncio.create_task(delete_command_messages(ctx, response))
 
 @bot.command(name='listsites')
 async def list_sites(ctx):
@@ -366,8 +423,8 @@ async def list_sites(ctx):
 
     for site in monitored_sites[channel_id]:
         embed.add_field(
-            name=site['name'],
-            value=f"URL: {site['url']}\nSélecteur: {site['selector'] or 'Automatique'}",
+            name=f"🔗 {site['name']}",
+            value=f"**Commande:** `!{site['command']}`\n**URL:** {site['url']}\n**Sélecteur:** {site['selector'] or 'Automatique'}\n**Lien direct:** {command_links.get(site['command'], 'Non défini')}",
             inline=False
         )
 
@@ -411,22 +468,29 @@ async def lol_help(ctx):
         description="Commandes disponibles :",
         color=0x0596AA
     )
-    embed.add_field(name="!addsite <url> [nom] [sélecteur]", value="Ajouter un site à surveiller", inline=False)
-    embed.add_field(name="!removesite <url>", value="Supprimer un site de la surveillance", inline=False)
+    embed.add_field(name="!addsite <commande> <url> [nom] [sélecteur]", value="Ajouter un site à surveiller", inline=False)
+    embed.add_field(name="!addlink <commande> <url>", value="Définir un lien direct pour une commande", inline=False)
+    embed.add_field(name="!removesite <url|commande>", value="Supprimer un site de la surveillance", inline=False)
     embed.add_field(name="!listsites", value="Afficher les sites surveillés", inline=False)
     embed.add_field(name="!testsite <url> [sélecteur]", value="Tester un site pour voir les parties détectées", inline=False)
     embed.add_field(name="Réaction 👁️", value="Réagir avec 👁️ sur une notification pour obtenir le lien", inline=False)
-    embed.set_footer(text="Le bot vérifie les sites toutes les 2 minutes")
+    embed.set_footer(text="Le bot vérifie les sites toutes les 2 minutes et supprime les commandes après 3 secondes")
     await ctx.send(embed=embed)
 
 @bot.event
 async def on_command_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
-        await ctx.send("❌ Vous n'avez pas les permissions nécessaires pour cette commande !")
+        response = await ctx.send("❌ Vous n'avez pas les permissions nécessaires pour cette commande !")
+        if ctx.command.name in ['addsite', 'removesite', 'addlink']:
+            asyncio.create_task(delete_command_messages(ctx, response))
     elif isinstance(error, commands.BadArgument):
-        await ctx.send("❌ Argument invalide ! Utilisez `!lolhelp` pour voir les commandes.")
+        response = await ctx.send("❌ Argument invalide ! Utilisez `!lolhelp` pour voir les commandes.")
+        if ctx.command.name in ['addsite', 'removesite', 'addlink']:
+            asyncio.create_task(delete_command_messages(ctx, response))
     elif isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send("❌ Argument manquant ! Utilisez `!lolhelp` pour voir les commandes.")
+        response = await ctx.send("❌ Argument manquant ! Utilisez `!lolhelp` pour voir les commandes.")
+        if ctx.command.name in ['addsite', 'removesite', 'addlink']:
+            asyncio.create_task(delete_command_messages(ctx, response))
     else:
         logger.error(f"Erreur non gérée: {error}")
 
