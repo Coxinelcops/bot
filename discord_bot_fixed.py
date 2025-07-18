@@ -205,8 +205,6 @@ async def send_game_notification(channel, game, site_name):
         embed.add_field(name="🌐 Source", value=site_name, inline=True)
         
         embed.add_field(
-            name="👁️ Observer", 
-            value="Réagissez avec 👁️ pour observer cette partie !", 
             inline=False
         )
         
