@@ -1,4 +1,4 @@
-import discord
+ import discord
 from discord.ext import commands, tasks
 import aiohttp
 import json
@@ -32,6 +32,7 @@ intents.guilds = True
 intents.reactions = True
 
 bot = commands.Bot(command_prefix='!', intents=intents)
+bot.remove_command('help')  # Supprime la commande help par défaut pour ajouter la tienne
 
 # === Twitch credentials ===
 TWITCH_CLIENT_ID = "tejcc6qy12vbclkl2qige9szpfoher"
