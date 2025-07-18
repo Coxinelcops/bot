@@ -108,7 +108,7 @@ class TwitchAPI:
         await self.ensure_valid_token()
         url = "https://api.twitch.tv/helix/users"
         params = {'login': username}
-
+        logger.info("get_user_info called")
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, headers=self.headers, params=params) as response:
@@ -189,30 +189,27 @@ class TwitchAPI:
             logger.error(f"Exception lors de la récupération des streams: {e}")
             return []
 
-        async def get_user_info(self, username):
-            await self.ensure_valid_token()
-            url = "https://api.twitch.tv/helix/users"
-            params = {'login': username}
-
-            try:
-                async with aiohttp.ClientSession() as session:
+    async def get_user_info(self, username):
+        await self.ensure_valid_token()
+        url = "https://api.twitch.tv/helix/users"
+        params = {'login': username}
+        logger.info("get_user_info called")
+        try:
+            async with aiohttp.ClientSession() as session:
                 async with session.get(url, headers=self.headers, params=params) as response:
-                if response.status == 200:
-                     pass
-                data = await response.json()
-                return data['data'][0] if data['data'] else None
-            elif response.status == 401:
-                 pass
-            logger.warning("Token Twitch invalide, renouvellement...")
-            await self.get_token()
-            return await self.get_user_info(username)
-        else:
-            logger.error(f"Erreur API Twitch user: {response.status}")
-            return None
+                    if response.status == 200:
+                        data = await response.json()
+                        return data['data'][0] if data['data'] else None
+                    elif response.status == 401:
+                        logger.warning("Token Twitch invalide, renouvellement...")
+                        await self.get_token()
+                        return await self.get_user_info(username)
+                    else:
+                        logger.error(f"Erreur API Twitch user: {response.status}")
+                        return None
         except Exception as e:
             logger.error(f"Exception lors de la récupération de l'utilisateur: {e}")
             return None
-
         def __init__(self):
             self.token = None
             self.headers = {}
@@ -276,28 +273,27 @@ class TwitchAPI:
         except Exception as e:
             logger.error(f"Exception lors de la récupération des streams: {e}")
             return []
-        async def get_user_info(self, username):
-            await self.ensure_valid_token()
-            url = "https://api.twitch.tv/helix/users"
-            params = {'login': username}
+    async def get_user_info(self, username):
+        await self.ensure_valid_token()
+        url = "https://api.twitch.tv/helix/users"
+        params = {'login': username}
+        logger.info("get_user_info called")
+        try:
             async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers=self.headers, params=params) as response:
-            if response.status == 200:
-                 pass
-            data = await response.json()
-            return data['data'][0] if data['data'] else None
-        elif response.status == 401:
-             pass
-        logger.warning("Token Twitch invalide, renouvellement...")
-        await self.get_token()
-        return await self.get_user_info(username)
-    else:
-        logger.error(f"Erreur API Twitch user: {response.status}")
-        return None
-    except Exception as e:
-        logger.error(f"Exception lors de la récupération de l'utilisateur: {e}")
-        return None
-    # === Classe pour OP.GG ===
+                async with session.get(url, headers=self.headers, params=params) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        return data['data'][0] if data['data'] else None
+                    elif response.status == 401:
+                        logger.warning("Token Twitch invalide, renouvellement...")
+                        await self.get_token()
+                        return await self.get_user_info(username)
+                    else:
+                        logger.error(f"Erreur API Twitch user: {response.status}")
+                        return None
+        except Exception as e:
+            logger.error(f"Exception lors de la récupération de l'utilisateur: {e}")
+            return None
     class OpGGAPI:
         def __init__(self):
             self.session = None
