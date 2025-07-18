@@ -70,46 +70,56 @@ class WebMonitor:
             return []
 
     async def detect_live_game(self, html, base_url):
-        """Détection simplifiée basée sur le mot 'live' et variantes"""
+        """Détection STRICTE basée sur le mot 'live' et variantes"""
         try:
             soup = BeautifulSoup(html, 'html.parser')
             games = []
 
-            # Mots-clés pour détecter une partie en cours
+            # Mots-clés STRICTS pour détecter une partie en cours
             live_keywords = [
                 'live', 'LIVE', 'Live',
                 'en cours', 'En cours', 'EN COURS',
-                'in game', 'In Game', 'IN GAME',
+                'in game', 'In Game', 'IN GAME', 'ingame',
                 'partie en cours', 'Partie en cours',
                 'spectate', 'Spectate', 'SPECTATE',
-                'observer', 'Observer', 'OBSERVER',
-                'watch', 'Watch', 'WATCH'
+                'observer', 'Observer', 'OBSERVER'
             ]
 
             # Recherche dans tout le texte de la page
             page_text = soup.get_text()
+            logger.info(f"Recherche de mots-clés LIVE dans la page...")
             
-            # Vérifier si au moins un mot-clé est présent
-            is_live = any(keyword in page_text for keyword in live_keywords)
-            
-            if is_live:
-                logger.info(f"Partie LIVE détectée sur {base_url}")
-                game_info = await self.extract_game_info_simple(soup, base_url)
-                if game_info:
-                    games.append(game_info)
-                    
-            # Recherche plus précise dans les éléments
+            # Vérifier chaque mot-clé avec logging
+            found_keywords = []
             for keyword in live_keywords:
-                # Recherche dans les éléments contenant le mot-clé
-                elements = soup.find_all(text=re.compile(keyword, re.I))
-                for element in elements:
-                    parent = element.parent
-                    if parent:
-                        # Vérifier si c'est vraiment un indicateur de partie en cours
-                        if await self.is_valid_live_indicator(parent, keyword):
-                            game_info = await self.extract_game_info_from_element(parent, base_url)
-                            if game_info and game_info not in games:
-                                games.append(game_info)
+                if keyword in page_text:
+                    found_keywords.append(keyword)
+            
+            if found_keywords:
+                logger.info(f"Mots-clés trouvés: {found_keywords}")
+                
+                # Recherche STRICTE dans les éléments spécifiques
+                for keyword in found_keywords:
+                    # Recherche dans les éléments contenant le mot-clé
+                    elements = soup.find_all(text=re.compile(rf'\b{re.escape(keyword)}\b', re.I))
+                    logger.info(f"Éléments trouvés pour '{keyword}': {len(elements)}")
+                    
+                    for element in elements:
+                        parent = element.parent
+                        if parent:
+                            # Vérification STRICTE
+                            if await self.is_valid_live_indicator(parent, keyword):
+                                game_info = await self.extract_game_info_from_element(parent, base_url)
+                                if game_info:
+                                    logger.info(f"✅ Partie LIVE confirmée avec '{keyword}'")
+                                    games.append(game_info)
+                                    break  # Une seule détection suffit
+                
+                # Si aucune partie trouvée malgré les mots-clés, ce sont probablement des faux positifs
+                if not games:
+                    logger.info(f"❌ Mots-clés trouvés mais aucune partie LIVE valide détectée")
+            else:
+                logger.info(f"❌ Aucun mot-clé LIVE trouvé sur la page")
 
             return games
 
@@ -118,27 +128,75 @@ class WebMonitor:
             return []
 
     async def is_valid_live_indicator(self, element, keyword):
-        """Vérifie si l'élément est un vrai indicateur de partie en cours"""
+        """Vérifie STRICTEMENT si l'élément est un vrai indicateur de partie en cours"""
         try:
-            # Vérifier la couleur (vert souvent utilisé pour "live")
+            # Obtenir le texte de l'élément et de ses parents
+            element_text = element.get_text().strip().lower()
+            parent_text = ""
+            if element.parent:
+                parent_text = element.parent.get_text().strip().lower()
+            
+            logger.info(f"Validation de l'élément avec '{keyword}': '{element_text[:50]}...'")
+            
+            # Vérifications STRICTES
+            
+            # 1. Vérifier que ce n'est pas dans un menu, footer, ou navigation
+            if any(word in element_text for word in ['menu', 'navigation', 'footer', 'header', 'sidebar']):
+                logger.info(f"❌ Élément dans navigation/menu - ignoré")
+                return False
+            
+            # 2. Vérifier que ce n'est pas un lien générique
+            if element.name == 'a' and element.get('href'):
+                href = element.get('href').lower()
+                if any(word in href for word in ['/live', '/watch', '/spectate']) and 'game' not in href:
+                    logger.info(f"❌ Lien générique - ignoré")
+                    return False
+            
+            # 3. Vérifier la présence d'indicateurs de partie en cours
+            game_indicators = [
+                'match', 'game', 'partie', 'spectate', 'observer', 'champion', 'summoner'
+            ]
+            
+            has_game_context = any(indicator in element_text or indicator in parent_text for indicator in game_indicators)
+            
+            if not has_game_context:
+                logger.info(f"❌ Pas de contexte de jeu - ignoré")
+                return False
+            
+            # 4. Vérifier la couleur (si disponible)
             style = element.get('style', '')
-            if 'color' in style.lower():
-                if any(color in style.lower() for color in ['green', '#00', 'rgb(0']):
+            if style:
+                # Chercher des couleurs vertes/rouges typiques du "live"
+                if any(color in style.lower() for color in ['green', '#00ff00', '#00f', 'rgb(0,255,0)', 'red', '#ff0000']):
+                    logger.info(f"✅ Couleur live détectée")
                     return True
             
-            # Vérifier les classes CSS
+            # 5. Vérifier les classes CSS
             classes = element.get('class', [])
             if isinstance(classes, list):
                 class_str = ' '.join(classes).lower()
-                if any(cls in class_str for cls in ['live', 'active', 'online', 'ingame', 'current']):
+                if any(cls in class_str for cls in ['live', 'active', 'online', 'ingame', 'current', 'playing']):
+                    logger.info(f"✅ Classe CSS live détectée: {class_str}")
                     return True
             
-            # Vérifier le contexte (éléments proches)
-            parent_text = element.get_text().lower()
-            if any(word in parent_text for word in ['spectate', 'observer', 'watch', 'game', 'match']):
-                return True
+            # 6. Vérifier que le mot-clé n'est pas dans une phrase générique
+            generic_phrases = [
+                'live streams', 'live updates', 'live news', 'live chat',
+                'watch live', 'follow live', 'see live', 'live broadcasts'
+            ]
+            
+            if any(phrase in element_text for phrase in generic_phrases):
+                logger.info(f"❌ Phrase générique détectée - ignoré")
+                return False
                 
-            return True  # Par défaut, accepter si le mot-clé est trouvé
+            # 7. Validation finale : le mot-clé doit être proche d'éléments de jeu
+            nearby_text = element_text + " " + parent_text
+            if any(word in nearby_text for word in ['champion', 'summoner', 'rank', 'level', 'kda', 'cs']):
+                logger.info(f"✅ Contexte de jeu confirmé")
+                return True
+            
+            logger.info(f"❌ Validation échouée - pas assez d'indicateurs")
+            return False
             
         except Exception as e:
             logger.debug(f"Erreur dans is_valid_live_indicator: {e}")
@@ -518,31 +576,99 @@ async def test_site(ctx, url=None):
 
     message = await ctx.send("🔍 Test de détection LIVE en cours...")
 
-    games = await web_monitor.check_site(url)
-    
-    if not games:
-        await message.edit(content="❌ Aucune partie LIVE détectée sur ce profil OP.GG.\n💡 Le bot recherche les mots: **LIVE**, **en cours**, **spectate**, etc.")
-        return
+    # Faire le test avec logs détaillés
+    try:
+        session = await web_monitor.get_session()
+        async with session.get(url) as response:
+            if response.status == 200:
+                html = await response.text()
+                
+                # Analyser la page
+                soup = BeautifulSoup(html, 'html.parser')
+                page_text = soup.get_text()
+                
+                # Rechercher les mots-clés
+                live_keywords = [
+                    'live', 'LIVE', 'Live',
+                    'en cours', 'En cours', 'EN COURS',
+                    'in game', 'In Game', 'IN GAME', 'ingame',
+                    'partie en cours', 'Partie en cours',
+                    'spectate', 'Spectate', 'SPECTATE',
+                    'observer', 'Observer', 'OBSERVER'
+                ]
+                
+                found_keywords = []
+                for keyword in live_keywords:
+                    if keyword in page_text:
+                        found_keywords.append(keyword)
+                
+                # Tester la détection complète
+                games = await web_monitor.detect_live_game(html, url)
+                
+                # Créer le rapport
+                embed = discord.Embed(
+                    title="🔍 Rapport de test de détection LIVE",
+                    color=0x0596AA
+                )
+                
+                embed.add_field(
+                    name="🌐 URL testée",
+                    value=f"[Lien]({url})",
+                    inline=False
+                )
+                
+                embed.add_field(
+                    name="📝 Mots-clés trouvés",
+                    value=f"**{len(found_keywords)}** mots-clés: {', '.join(found_keywords) if found_keywords else 'Aucun'}",
+                    inline=False
+                )
+                
+                if games:
+                    embed.color = 0x00ff00
+                    embed.add_field(
+                        name="✅ Résultat",
+                        value=f"**{len(games)} partie(s) LIVE détectée(s)**",
+                        inline=False
+                    )
+                    
+                    for i, game in enumerate(games[:2], 1):
+                        embed.add_field(
+                            name=f"🔴 Partie LIVE {i}",
+                            value=f"👤 {game['player']}\n[🎮 Regarder]({game['url']})",
+                            inline=True
+                        )
+                else:
+                    embed.color = 0xff0000
+                    embed.add_field(
+                        name="❌ Résultat",
+                        value="**Aucune partie LIVE détectée**",
+                        inline=False
+                    )
+                    
+                    if found_keywords:
+                        embed.add_field(
+                            name="💡 Explication",
+                            value="Des mots-clés ont été trouvés mais la validation stricte a échoué.\nIls sont probablement dans des menus ou liens génériques.",
+                            inline=False
+                        )
+                    else:
+                        embed.add_field(
+                            name="💡 Explication",
+                            value="Aucun mot-clé LIVE trouvé sur la page.\nLe joueur n'est probablement pas en partie actuellement.",
+                            inline=False
+                        )
+                
+                embed.set_footer(text="Test terminé • Vérification stricte activée")
+                await message.edit(content="", embed=embed)
+                
+            else:
+                await message.edit(content=f"❌ Erreur HTTP {response.status} - Impossible d'accéder au site")
+                
+    except Exception as e:
+        logger.error(f"Erreur lors du test: {e}")
+        await message.edit(content=f"❌ Erreur lors du test: {str(e)}")
 
-    embed = discord.Embed(
-        title=f"🔴 Parties LIVE détectées ({len(games)})",
-        description="Voici les parties LIVE trouvées :",
-        color=0xFF0000
-    )
 
-    for i, game in enumerate(games[:3], 1):
-        embed.add_field(
-            name=f"🔴 Partie LIVE {i}",
-            value=f"**{game['title']}**\n"
-                  f"👤 Joueur: {game['player']}\n"
-                  f"🏆 Rang: {game['rank']}\n"
-                  f"📊 Niveau: {game['level']}\n"
-                  f"[🎮 Regarder]({game['url']})",
-            inline=False
-        )
-
-    embed.set_footer(text="Détection basée sur les mots-clés LIVE")
-    await message.edit(content="", embed=embed)
 
 @bot.command(name='lolhelp')
 async def lol_help(ctx):
