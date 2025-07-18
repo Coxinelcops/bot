@@ -140,3 +140,11 @@ async def debug_check(ctx, url: str):
 
     except Exception as e:
         await ctx.send(f"❌ Erreur debugcheck: {str(e)}")
+      
+if __name__ == "__main__":
+    # Démarrer Flask dans un thread séparé
+    flask_thread = Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+
+    # Remplace cette ligne par ton vrai token Discord (entre guillemets)
+    bot.run("TON_VRAI_TOKEN_ICI")
