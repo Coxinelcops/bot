@@ -46,30 +46,29 @@ def run_flask():
             self.headers = {}
             self.token_expires_at = None
 
-            async def get_token(self):
-                url = "https://id.twitch.tv/oauth2/token"
-                params = {
-                'client_id': TWITCH_CLIENT_ID,
-                'client_secret': TWITCH_CLIENT_SECRET,
-                'grant_type': 'client_credentials'
-            }
-            try:
-                async with aiohttp.ClientSession() as session:
+    async def get_token(self):
+        url = "https://id.twitch.tv/oauth2/token"
+        params = {
+            'client_id': TWITCH_CLIENT_ID,
+            'client_secret': TWITCH_CLIENT_SECRET,
+            'grant_type': 'client_credentials'
+        }
+        try:
+            async with aiohttp.ClientSession() as session:
                 async with session.post(url, params=params) as response:
-                if response.status == 200:
-                     pass
-                data = await response.json()
-                self.token = data['access_token']
-                self.headers = {
-                'Client-ID': TWITCH_CLIENT_ID,
-                'Authorization': f'Bearer {self.token}'
-            }
-            self.token_expires_at = datetime.now(UTC).timestamp() + data.get('expires_in', 3600)
-            logger.info("Token Twitch obtenu avec succès")
-            return True
-        else:
-            logger.error(f"Erreur lors de l'obtention du token Twitch: {response.status}")
-            return False
+                    if response.status == 200:
+                        data = await response.json()
+                        self.token = data['access_token']
+                        self.headers = {
+                            'Client-ID': TWITCH_CLIENT_ID,
+                            'Authorization': f'Bearer {self.token}'
+                        }
+                        self.token_expires_at = datetime.now(UTC).timestamp() + data.get('expires_in', 3600)
+                        logger.info("Token Twitch obtenu avec succès")
+                        return True
+                    else:
+                        logger.error(f"Erreur lors de l'obtention du token Twitch: {response.status}")
+                        return False
         except Exception as e:
             logger.error(f"Exception lors de l'obtention du token Twitch: {e}")
             return False
@@ -140,33 +139,32 @@ def run_flask():
                 self.token = None
                 self.headers = {}
                 self.token_expires_at = None
-                async def get_token(self):
-                    url = "https://id.twitch.tv/oauth2/token"
-                    params = {
-                    'client_id': TWITCH_CLIENT_ID,
-                    'client_secret': TWITCH_CLIENT_SECRET,
-                    'grant_type': 'client_credentials'
-                }
-                try:
-                    async with aiohttp.ClientSession() as session:
-                    async with session.post(url, params=params) as response:
+    async def get_token(self):
+        url = "https://id.twitch.tv/oauth2/token"
+        params = {
+            'client_id': TWITCH_CLIENT_ID,
+            'client_secret': TWITCH_CLIENT_SECRET,
+            'grant_type': 'client_credentials'
+        }
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, params=params) as response:
                     if response.status == 200:
-                         pass
-                    data = await response.json()
-                    self.token = data['access_token']
-                    self.headers = {
-                    'Client-ID': TWITCH_CLIENT_ID,
-                    'Authorization': f'Bearer {self.token}'
-                }
-                self.token_expires_at = datetime.now(UTC).timestamp() + data.get('expires_in', 3600)
-                logger.info("Token Twitch obtenu avec succès")
-                return True
-            else:
-                logger.error(f"Erreur lors de l'obtention du token Twitch: {response.status}")
-                return False
-            except Exception as e:
-                logger.error(f"Exception lors de l'obtention du token Twitch: {e}")
-                return False
+                        data = await response.json()
+                        self.token = data['access_token']
+                        self.headers = {
+                            'Client-ID': TWITCH_CLIENT_ID,
+                            'Authorization': f'Bearer {self.token}'
+                        }
+                        self.token_expires_at = datetime.now(UTC).timestamp() + data.get('expires_in', 3600)
+                        logger.info("Token Twitch obtenu avec succès")
+                        return True
+                    else:
+                        logger.error(f"Erreur lors de l'obtention du token Twitch: {response.status}")
+                        return False
+        except Exception as e:
+            logger.error(f"Exception lors de l'obtention du token Twitch: {e}")
+            return False
 
             async def ensure_valid_token(self):
                 if not self.token or (self.token_expires_at and datetime.now(UTC).timestamp() >= self.token_expires_at - 300):
