@@ -30,19 +30,21 @@ logger = logging.getLogger(__name__)
 intents = discord.Intents.default()
 intents.message_content = True
 intents.guilds = True
+intents.reactions = True
 
 bot = commands.Bot(command_prefix='!', intents=intents)
-bot.ready_flag = False  # Évite relance multiple
+bot.ready_flag = False
 
 # === Stockage des données ===
-monitored_sites = {}  # {channel_id: [{'url': str, 'selector': str, 'name': str}]}
-active_games = {}  # {channel_id: {game_id: message_id}}
+monitored_sites = {}
+active_games = {}
+reaction_game_messages = {}
 
 class WebMonitor:
     def __init__(self):
         self.session = None
         self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         }
 
     async def get_session(self):
@@ -54,13 +56,13 @@ class WebMonitor:
         return self.session
 
     async def check_site(self, url, selector=None):
-        """Vérifie un site pour des parties LoL disponibles"""
+        """Vérifie un site pour des parties LoL en cours"""
         try:
             session = await self.get_session()
             async with session.get(url) as response:
                 if response.status == 200:
                     html = await response.text()
-                    return await self.parse_lol_games(html, url, selector)
+                    return await self.parse_opgg_games(html, url)
                 else:
                     logger.warning(f"Erreur HTTP {response.status} pour {url}")
                     return []
@@ -68,52 +70,63 @@ class WebMonitor:
             logger.error(f"Erreur lors de la vérification de {url}: {e}")
             return []
 
-    async def parse_lol_games(self, html, base_url, selector=None):
-        """Parse le HTML pour extraire les parties LoL disponibles"""
+    async def parse_opgg_games(self, html, base_url):
+        """Parse spécifiquement les pages OP.GG pour détecter les parties en cours"""
         try:
             soup = BeautifulSoup(html, 'html.parser')
             games = []
 
-            if selector:
-                # Utilise un sélecteur CSS personnalisé
-                elements = soup.select(selector)
-            else:
-                # Recherche améliorée selon les patterns courants des sites LoL
-                patterns = [
-                    # Liens de spectate directs
-                    {'tag': 'a', 'href': re.compile(r'spectate|watch|view|live', re.I)},
-                    # Éléments contenant des mots-clés LoL
-                    {'tag': ['div', 'span', 'td', 'li'], 'text': re.compile(r'spectate|watch|live|in\s*game|playing|match|game', re.I)},
-                    # Éléments avec des classes communes
-                    {'tag': ['div', 'a'], 'class': re.compile(r'game|match|spectate|live|watch', re.I)},
-                    # Boutons de spectate
-                    {'tag': ['button', 'a'], 'text': re.compile(r'spectate|watch|view', re.I)}
-                ]
-                
-                elements = []
-                for pattern in patterns:
-                    if 'href' in pattern:
-                        found = soup.find_all(pattern['tag'], href=pattern['href'])
-                    elif 'class' in pattern:
-                        found = soup.find_all(pattern['tag'], class_=pattern['class'])
-                    elif 'text' in pattern:
-                        found = soup.find_all(pattern['tag'], string=pattern['text'])
+            # Recherche spécifique pour OP.GG - "Partie en cours" en vert
+            # Plusieurs sélecteurs possibles selon la version d'OP.GG
+            selectors_to_try = [
+                # Sélecteurs pour le texte "Partie en cours" ou "In Game"
+                'div:contains("Partie en cours")',
+                'span:contains("Partie en cours")',
+                'div:contains("In Game")',
+                'span:contains("In Game")',
+                '.live-game',
+                '.in-game',
+                '.game-status',
+                # Sélecteurs pour les éléments avec couleur verte
+                'div[style*="color: green"]',
+                'span[style*="color: green"]',
+                'div[style*="color:#00ff00"]',
+                'span[style*="color:#00ff00"]',
+                # Classes CSS communes pour les parties en cours
+                '.status-live',
+                '.status-ingame',
+                '.live-indicator'
+            ]
+
+            # Essayer chaque sélecteur
+            for selector in selectors_to_try:
+                try:
+                    if ':contains(' in selector:
+                        # Pour les sélecteurs avec :contains, faire une recherche manuelle
+                        text_to_find = selector.split(':contains("')[1].split('")')[0]
+                        elements = soup.find_all(text=re.compile(text_to_find, re.I))
+                        for text_element in elements:
+                            parent = text_element.parent
+                            if parent:
+                                game_info = await self.extract_opgg_game_info(parent, base_url)
+                                if game_info:
+                                    games.append(game_info)
                     else:
-                        found = soup.find_all(pattern['tag'])
-                    
-                    elements.extend(found)
-                
-                # Supprime les doublons
-                elements = list(set(elements))
+                        # Pour les sélecteurs CSS standards
+                        elements = soup.select(selector)
+                        for element in elements:
+                            game_info = await self.extract_opgg_game_info(element, base_url)
+                            if game_info:
+                                games.append(game_info)
+                except Exception as e:
+                    logger.debug(f"Erreur avec le sélecteur {selector}: {e}")
+                    continue
 
-            logger.info(f"Trouvé {len(elements)} éléments potentiels sur {base_url}")
+            # Si aucune partie trouvée avec les sélecteurs, essayer une recherche plus générale
+            if not games:
+                games = await self.fallback_search(soup, base_url)
 
-            for element in elements:
-                game_info = await self.extract_game_info(element, base_url)
-                if game_info:
-                    games.append(game_info)
-
-            # Supprime les doublons basés sur l'URL
+            # Éliminer les doublons
             unique_games = []
             seen_urls = set()
             for game in games:
@@ -121,147 +134,128 @@ class WebMonitor:
                     unique_games.append(game)
                     seen_urls.add(game['url'])
 
-            logger.info(f"Détecté {len(unique_games)} parties uniques")
             return unique_games
+
         except Exception as e:
-            logger.error(f"Erreur lors du parsing: {e}")
+            logger.error(f"Erreur lors du parsing OP.GG: {e}")
             return []
 
-    async def extract_game_info(self, element, base_url):
-        """Extrait les informations d'une partie depuis un élément HTML"""
+    async def fallback_search(self, soup, base_url):
+        """Recherche de fallback pour trouver des parties en cours"""
+        games = []
+        
+        # Rechercher tous les liens qui pourraient mener à des parties
+        all_links = soup.find_all('a', href=True)
+        
+        for link in all_links:
+            href = link.get('href')
+            text = link.get_text(strip=True).lower()
+            
+            # Vérifier si c'est un lien de spectate ou de partie en cours
+            if any(keyword in text for keyword in ['spectate', 'observer', 'partie', 'game', 'live']):
+                # Vérifier si le parent contient des indicateurs de partie en cours
+                parent = link.find_parent(['div', 'span', 'td', 'li'])
+                if parent:
+                    parent_text = parent.get_text().lower()
+                    if any(keyword in parent_text for keyword in ['partie en cours', 'in game', 'live', 'en cours']):
+                        game_info = await self.extract_opgg_game_info(link, base_url)
+                        if game_info:
+                            games.append(game_info)
+        
+        return games
+
+    async def extract_opgg_game_info(self, element, base_url):
+        """Extrait les informations d'une partie OP.GG"""
         try:
-            # Chercher le lien de spectate de plusieurs façons
-            link = None
-            url = None
+            # Trouver le lien de spectate
+            spectate_link = None
             
-            # Cas 1: L'élément est déjà un lien
+            # Si l'élément est déjà un lien
             if element.name == 'a' and element.get('href'):
-                link = element
-                url = element.get('href')
+                spectate_link = element.get('href')
             
-            # Cas 2: Chercher un lien enfant
-            if not link:
-                child_link = element.find('a')
-                if child_link and child_link.get('href'):
-                    link = child_link
-                    url = child_link.get('href')
+            # Sinon, chercher un lien dans l'élément ou ses enfants
+            if not spectate_link:
+                link_element = element.find('a', href=True)
+                if link_element:
+                    spectate_link = link_element.get('href')
             
-            # Cas 3: Chercher un lien parent
-            if not link:
-                parent_link = element.find_parent('a')
-                if parent_link and parent_link.get('href'):
-                    link = parent_link
-                    url = parent_link.get('href')
+            # Chercher un lien dans les éléments frères
+            if not spectate_link:
+                siblings = element.find_next_siblings('a', limit=3)
+                for sibling in siblings:
+                    if sibling.get('href'):
+                        href = sibling.get('href')
+                        if 'spectate' in href.lower() or 'observer' in href.lower():
+                            spectate_link = href
+                            break
             
-            # Cas 4: Chercher un lien dans le même conteneur
-            if not link:
-                container = element.find_parent(['div', 'td', 'li'])
-                if container:
-                    container_link = container.find('a')
-                    if container_link and container_link.get('href'):
-                        link = container_link
-                        url = container_link.get('href')
-            
-            if not url:
+            if not spectate_link:
                 return None
 
-            # Normaliser l'URL
-            if url.startswith('/'):
-                url = base_url.rstrip('/') + url
-            elif not url.startswith('http'):
-                # Essayer de construire une URL relative
-                if '.' in url:  # Probablement une URL relative
-                    url = base_url.rstrip('/') + '/' + url
-                else:
-                    return None
-            
-            # Vérifier que l'URL semble être un lien de spectate
-            if not self.is_spectate_url(url):
-                return None
+            # Construire l'URL complète
+            if spectate_link.startswith('/'):
+                full_url = base_url.rstrip('/') + spectate_link
+            elif spectate_link.startswith('http'):
+                full_url = spectate_link
+            else:
+                full_url = base_url.rstrip('/') + '/' + spectate_link
 
-            # Extraire le titre
-            title = self.extract_title(element, link)
+            # Extraire les informations du joueur
+            player_name = "Joueur inconnu"
+            rank = "Non classé"
+            level = "?"
             
-            # Extraire les informations supplémentaires
-            level, rank = self.extract_player_info(element)
+            # Chercher le nom du joueur dans la page
+            page_container = element.find_parent(['div', 'section', 'article', 'table'])
+            if page_container:
+                # Chercher dans le texte du conteneur
+                container_text = page_container.get_text()
+                
+                # Extraction du rang
+                rank_patterns = [
+                    r'(Iron|Bronze|Silver|Gold|Platinum|Diamond|Master|GrandMaster|Challenger)\s*([IVX]*)',
+                    r'(Fer|Bronze|Argent|Or|Platine|Diamant|Maître|Grand[Mm]aître|Challenger)\s*([IVX]*)'
+                ]
+                
+                for pattern in rank_patterns:
+                    match = re.search(pattern, container_text, re.I)
+                    if match:
+                        rank = match.group(1).title()
+                        if match.group(2):
+                            rank += f" {match.group(2)}"
+                        break
+                
+                # Extraction du niveau
+                level_match = re.search(r'(?:Level|Niveau|Lvl)\s*(\d+)', container_text, re.I)
+                if level_match:
+                    level = level_match.group(1)
+                
+                # Extraction du nom du joueur (souvent dans le title ou près du lien)
+                title_element = page_container.find(['h1', 'h2', 'h3', 'title'])
+                if title_element:
+                    title_text = title_element.get_text(strip=True)
+                    # Extraire le nom du joueur du titre
+                    name_match = re.search(r'([a-zA-Z0-9\s]+)(?:\s-\s|$)', title_text)
+                    if name_match:
+                        player_name = name_match.group(1).strip()
+
+            # Créer un ID unique pour cette partie
+            game_id = hash(f"{full_url}_{player_name}_{datetime.now(UTC).strftime('%Y%m%d%H%M')}")
 
             return {
-                'id': hash(url),  # ID unique basé sur l'URL
-                'url': url,
-                'title': title,
+                'id': game_id,
+                'url': full_url,
+                'title': f"Partie de {player_name}",
+                'player': player_name,
                 'level': level,
                 'rank': rank,
                 'timestamp': datetime.now(UTC).timestamp()
             }
+
         except Exception as e:
-            logger.error(f"Erreur lors de l'extraction: {e}")
+            logger.error(f"Erreur lors de l'extraction OP.GG: {e}")
             return None
-
-    def is_spectate_url(self, url):
-        """Vérifie si l'URL semble être un lien de spectate valide"""
-        spectate_patterns = [
-            r'spectate',
-            r'watch',
-            r'view',
-            r'live',
-            r'game',
-            r'match',
-            r'riot:',
-            r'lol:',
-            r'\.bat',
-            r'\.exe',
-            r'download',
-            r'play\.tv',
-            r'op\.gg',
-            r'porofessor',
-            r'lolimo',
-            r'lolspectator'
-        ]
-        
-        url_lower = url.lower()
-        return any(re.search(pattern, url_lower) for pattern in spectate_patterns)
-
-    def extract_title(self, element, link):
-        """Extrait le titre de la partie"""
-        # Essayer plusieurs sources pour le titre
-        title_sources = [
-            link.get_text(strip=True) if link else "",
-            element.get_text(strip=True),
-            element.get('title', ''),
-            element.get('alt', '')
-        ]
-        
-        for title in title_sources:
-            if title and len(title) > 3:
-                return title
-        
-        return "Partie League of Legends"
-
-    def extract_player_info(self, element):
-        """Extrait les informations du joueur (niveau, rang)"""
-        # Chercher dans l'élément et ses parents
-        search_elements = [element]
-        parent = element.find_parent(['div', 'td', 'li', 'article', 'section'])
-        if parent:
-            search_elements.append(parent)
-        
-        level = "?"
-        rank = "Non classé"
-        
-        for elem in search_elements:
-            text = elem.get_text()
-            
-            # Chercher le niveau
-            level_match = re.search(r'level\s*:?\s*(\d+)', text, re.I)
-            if level_match:
-                level = level_match.group(1)
-            
-            # Chercher le rang
-            rank_match = re.search(r'(iron|bronze|silver|gold|platinum|diamond|master|grandmaster|challenger)', text, re.I)
-            if rank_match:
-                rank = rank_match.group(1).title()
-        
-        return level, rank
 
     async def close(self):
         if self.session:
@@ -273,13 +267,14 @@ web_monitor = WebMonitor()
 async def on_ready():
     if not getattr(bot, "ready_flag", False):
         print(f'{bot.user} est connecté et prêt !')
-        if not check_lol_games.is_running():
-            check_lol_games.start()
+        logger.info(f'Bot connecté en tant que {bot.user}')
+    if not check_lol_games.is_running():
+        check_lol_games.start()
         bot.ready_flag = True
 
-@tasks.loop(minutes=2)  # Vérification toutes les 2 minutes
+@tasks.loop(minutes=2)
 async def check_lol_games():
-    """Vérifie les sites pour de nouvelles parties LoL"""
+    """Vérifie les sites pour de nouvelles parties LoL en cours"""
     try:
         for channel_id, sites in monitored_sites.items():
             if not sites:
@@ -294,16 +289,20 @@ async def check_lol_games():
                 active_games[channel_id] = {}
 
             for site in sites:
+                logger.info(f"Vérification de {site['url']} pour le channel {channel.name}")
                 games = await web_monitor.check_site(site['url'], site.get('selector'))
+                
+                logger.info(f"Trouvé {len(games)} parties sur {site['name']}")
                 
                 for game in games:
                     game_id = game['id']
                     
                     # Vérifier si la partie est déjà affichée
                     if game_id not in active_games[channel_id]:
-                        await send_game_notification(channel, game, site['name'])
+                        await send_game_notification(channel, game, site)
+                        active_games[channel_id][game_id] = None  # Marquer comme envoyée
 
-        # Nettoyer les anciennes parties (plus de 30 minutes)
+        # Nettoyer les anciennes parties
         await cleanup_old_games()
 
     except Exception as e:
@@ -313,37 +312,44 @@ async def check_lol_games():
 async def before_check_lol_games():
     await bot.wait_until_ready()
 
-async def send_game_notification(channel, game, site_name):
-    """Envoie une notification pour une nouvelle partie LoL"""
+async def send_game_notification(channel, game, site_data):
+    """Envoie une notification pour une nouvelle partie LoL en cours"""
     try:
+        # Utiliser les infos personnalisées si disponibles
+        player_name = site_data.get('player_name', game['player'])
+        player_role = site_data.get('role', None)
+        
         embed = discord.Embed(
-            title="🎮 Nouvelle partie League of Legends !",
-            description=f"**{game['title']}**",
-            color=0x0596AA,
+            title="🔴 Partie League of Legends en cours !",
+            description=f"**{player_name}** est actuellement en jeu",
+            color=0x00ff00,  # Vert pour "en cours"
             timestamp=datetime.now(UTC)
         )
         
+        embed.add_field(name="👤 Joueur", value=player_name, inline=True)
+        if player_role:
+            embed.add_field(name="🎯 Rôle", value=player_role, inline=True)
         embed.add_field(name="🏆 Rang", value=game['rank'], inline=True)
         embed.add_field(name="📊 Niveau", value=game['level'], inline=True)
-        embed.add_field(name="🌐 Source", value=site_name, inline=True)
+        embed.add_field(name="🌐 Source", value=site_data['name'], inline=True)
         
         embed.add_field(
-            name="🔗 Lien d'observation", 
-            value=f"[Cliquez ici pour observer]({game['url']})", 
+            name="🔗 Lien direct",
+            value=f"[Cliquer ici pour observer]({game['url']})",
             inline=False
         )
         
-        embed.set_footer(text=f"Détecté sur {site_name}")
-        
-        # Ajouter une image si disponible
-        embed.set_thumbnail(url="https://i.imgur.com/28W8RHN.png")  # Logo LoL
+        embed.set_footer(text=f"Détecté sur {site_data['name']} • Partie en cours")
+        embed.set_thumbnail(url="https://i.imgur.com/28W8RHN.png")
 
         message = await channel.send(embed=embed)
 
         # Stocker les informations
+        if channel.id not in active_games:
+            active_games[channel.id] = {}
         active_games[channel.id][game['id']] = message.id
 
-        logger.info(f"Notification envoyée pour une partie LoL dans {channel.name}")
+        logger.info(f"Notification envoyée pour {player_name} dans {channel.name}")
 
     except discord.Forbidden:
         logger.error(f"Pas de permission pour envoyer un message dans {channel.name}")
@@ -356,38 +362,95 @@ async def cleanup_old_games():
     to_remove = []
 
     for channel_id, games in active_games.items():
+        if not games:
+            continue
+            
         channel = bot.get_channel(channel_id)
         if not channel:
             continue
 
         for game_id, message_id in games.items():
-            # Vérifier si le message est vieux de plus de 30 minutes
-            try:
-                message = await channel.fetch_message(message_id)
-                if message.created_at.timestamp() < current_time - 1800:  # 30 minutes
-                    await message.delete()
-                    to_remove.append((channel_id, game_id))
-            except discord.NotFound:
-                to_remove.append((channel_id, game_id))
-            except Exception as e:
-                logger.error(f"Erreur lors du nettoyage: {e}")
+            if message_id and message_id in reaction_game_messages:
+                game_info = reaction_game_messages[message_id]['game_info']
+                if current_time - game_info['timestamp'] > 1800:  # 30 minutes
+                    try:
+                        message = await channel.fetch_message(message_id)
+                        
+                        # Modifier le message pour indiquer que la partie est terminée
+                        embed = message.embeds[0]
+                        embed.title = "⚫ Partie terminée"
+                        embed.color = 0x808080  # Gris
+                        embed.set_footer(text=f"Partie terminée • Était sur {games[game_id] if isinstance(games[game_id], str) else 'OP.GG'}")
+                        
+                        await message.edit(embed=embed)
+                        
+                        to_remove.append((channel_id, game_id, message_id))
+                    except discord.NotFound:
+                        to_remove.append((channel_id, game_id, message_id))
+                    except Exception as e:
+                        logger.error(f"Erreur lors de la mise à jour du message: {e}")
 
     # Supprimer les références
-    for channel_id, game_id in to_remove:
+    for channel_id, game_id, message_id in to_remove:
         active_games[channel_id].pop(game_id, None)
+
+@bot.event
+async def on_reaction_add(reaction, user):
+    """Gère les réactions pour observer les parties"""
+    if user.bot:
+        return
+
+    message_id = reaction.message.id
+    if message_id not in reaction_game_messages:
+        return
+
+    if str(reaction.emoji) != "👁️":
+        return
+
+    game_data = reaction_game_messages[message_id]
+    
+    try:
+        # Envoyer le lien en DM
+        embed = discord.Embed(
+            title="🎮 Lien d'observation LoL",
+            description=f"Voici le lien pour observer la partie de **{game_data['game_info']['player']}** :",
+            color=0x00ff00
+        )
+        embed.add_field(name="🔗 Lien", value=f"[Cliquez ici pour observer]({game_data['url']})", inline=False)
+        embed.add_field(name="📋 URL complète", value=f"```{game_data['url']}```", inline=False)
+        embed.add_field(name="ℹ️ Info", value="Copiez le lien et ouvrez-le dans votre navigateur", inline=False)
+        embed.set_footer(text=f"Source: {game_data['site_name']}")
+
+        await user.send(embed=embed)
+        logger.info(f"Lien d'observation envoyé à {user.name}")
+
+    except discord.Forbidden:
+        # Si on ne peut pas envoyer en DM, répondre dans le channel
+        try:
+            await reaction.message.channel.send(
+                f"{user.mention}, voici le lien pour observer la partie : {game_data['url']}", 
+                delete_after=60
+            )
+        except Exception as e:
+            logger.error(f"Erreur lors de l'envoi du lien: {e}")
 
 # === Commandes ===
 
 @bot.command(name='addsite')
 @commands.has_permissions(manage_channels=True)
-async def add_site(ctx, url=None, name=None, selector=None):
-    """Ajoute un site à surveiller pour des parties LoL"""
+async def add_site(ctx, url=None, player_name=None, role=None):
+    """Ajoute un site OP.GG à surveiller avec nom et rôle optionnels"""
     if not url:
-        await ctx.send("❌ Veuillez spécifier une URL !\nExemple: `!addsite https://example.com \"Mon Site\" \".game-link\"`")
+        await ctx.send("❌ Veuillez spécifier une URL OP.GG !\nExemple: `!addsite https://euw.op.gg/summoner/userName=pseudo [nom_joueur] [rôle]`")
         return
 
-    if not name:
-        name = url
+    # Nom par défaut extrait de l'URL si non fourni
+    if not player_name:
+        match = re.search(r'userName=([^&]+)', url)
+        if match:
+            player_name = match.group(1).replace('%20', ' ')
+        else:
+            player_name = "Joueur inconnu"
 
     channel_id = ctx.channel.id
     if channel_id not in monitored_sites:
@@ -401,19 +464,46 @@ async def add_site(ctx, url=None, name=None, selector=None):
 
     site_data = {
         'url': url,
-        'name': name,
-        'selector': selector
+        'name': player_name,
+        'player_name': player_name,
+        'role': role,
+        'selector': None
     }
 
     monitored_sites[channel_id].append(site_data)
-    await ctx.send(f"✅ Site ajouté à la surveillance : **{name}**")
+    
+    # Embed de base ou personnalisé selon les paramètres
+    if not player_name and not role:
+        # Embed de base
+        embed = discord.Embed(
+            title="✅ Site ajouté",
+            description=f"Surveillance activée",
+            color=0x00ff00
+        )
+        embed.add_field(name="URL", value=url, inline=False)
+    else:
+        # Embed personnalisé
+        embed = discord.Embed(
+            title="✅ Site ajouté",
+            description=f"**{player_name}** est maintenant surveillé",
+            color=0x00ff00
+        )
+        embed.add_field(name="👤 Joueur", value=player_name, inline=True)
+        if role:
+            embed.add_field(name="🎯 Rôle", value=role, inline=True)
+        embed.add_field(name="🔗 Profil OP.GG", value=f"[Voir le profil]({url})", inline=False)
+    
+    embed.add_field(name="🔍 Vérification", value="Toutes les 2 minutes", inline=True)
+    embed.set_footer(text="Le bot détectera automatiquement les parties en cours")
+    
+    await ctx.send(embed=embed)
 
 @bot.command(name='removesite')
 @commands.has_permissions(manage_channels=True)
-async def remove_site(ctx, url=None):
-    """Supprime un site de la surveillance"""
-    if not url:
-        await ctx.send("❌ Veuillez spécifier l'URL du site à supprimer !")
+async def remove_site(ctx, *, identifier=None):
+    """Supprime un site de la surveillance (par URL ou nom)"""
+    if not identifier:
+        await ctx.send("❌ Veuillez spécifier l'URL ou le nom du site à supprimer !")
         return
 
     channel_id = ctx.channel.id
@@ -422,9 +512,9 @@ async def remove_site(ctx, url=None):
         return
 
     for i, site in enumerate(monitored_sites[channel_id]):
-        if site['url'] == url:
+        if site['url'] == identifier or site.get('player_name', site['name']).lower() == identifier.lower():
             removed_site = monitored_sites[channel_id].pop(i)
-            await ctx.send(f"✅ Site supprimé : **{removed_site['name']}**")
+            await ctx.send(f"✅ Site supprimé : **{removed_site.get('player_name', removed_site['name'])}**")
             return
 
     await ctx.send("❌ Site non trouvé dans la liste !")
@@ -440,117 +530,95 @@ async def list_sites(ctx):
 
     embed = discord.Embed(
         title="📋 Sites surveillés",
+        description=f"**{len(monitored_sites[channel_id])}** site(s) surveillé(s)",
         color=0x0596AA
     )
 
-    for site in monitored_sites[channel_id]:
+    for i, site in enumerate(monitored_sites[channel_id], 1):
+        field_value = f"[Lien OP.GG]({site['url']})"
+        if site.get('role'):
+            field_value += f"\n🎯 Rôle: {site['role']}"
+        
         embed.add_field(
-            name=site['name'],
-            value=f"URL: {site['url']}\nSélecteur: {site['selector'] or 'Automatique'}",
+            name=f"{i}. {site.get('player_name', site['name'])}",
+            value=field_value,
             inline=False
         )
 
+    embed.set_footer(text="Vérification toutes les 2 minutes")
     await ctx.send(embed=embed)
 
 @bot.command(name='testsite')
 @commands.has_permissions(manage_channels=True)
-async def test_site(ctx, url=None, selector=None):
-    """Test un site pour voir les parties détectées"""
+async def test_site(ctx, url=None):
+    """Test un site OP.GG pour voir si une partie est détectée"""
     if not url:
-        await ctx.send("❌ Veuillez spécifier une URL à tester !")
+        await ctx.send("❌ Veuillez spécifier une URL OP.GG à tester !")
         return
 
-    await ctx.send("🔍 Test du site en cours...")
+    message = await ctx.send("🔍 Test du site OP.GG en cours...")
 
-    games = await web_monitor.check_site(url, selector)
+    games = await web_monitor.check_site(url)
     
     if not games:
-        await ctx.send("❌ Aucune partie détectée sur ce site.")
+        await message.edit(content="❌ Aucune partie en cours détectée sur ce profil OP.GG.")
         return
 
     embed = discord.Embed(
         title=f"🎮 Parties détectées ({len(games)})",
-        color=0x0596AA
+        description="Voici les parties en cours trouvées :",
+        color=0x00ff00
     )
 
-    for i, game in enumerate(games[:5]):  # Limiter à 5 résultats
+    for i, game in enumerate(games[:3], 1):  # Limiter à 3 résultats
         embed.add_field(
-            name=f"Partie {i+1}",
-            value=f"**{game['title']}**\nRang: {game['rank']}\nNiveau: {game['level']}\n[Lien]({game['url']})",
+            name=f"Partie {i}",
+            value=f"**{game['title']}**\n"
+                  f"Joueur: {game['player']}\n"
+                  f"Rang: {game['rank']}\n"
+                  f"Niveau: {game['level']}\n"
+                  f"[Lien d'observation]({game['url']})",
             inline=False
         )
 
-    if len(games) > 5:
-        embed.set_footer(text=f"Et {len(games) - 5} autres parties...")
-
-    await ctx.send(embed=embed)
-
-@bot.command(name='debug')
-@commands.has_permissions(manage_channels=True)
-async def debug_site(ctx, url=None):
-    """Debug un site pour voir les éléments détectés"""
-    if not url:
-        await ctx.send("❌ Veuillez spécifier une URL à déboguer !")
-        return
-
-    await ctx.send("🔍 Debug du site en cours...")
-
-    try:
-        session = await web_monitor.get_session()
-        async with session.get(url) as response:
-            if response.status != 200:
-                await ctx.send(f"❌ Erreur HTTP {response.status}")
-                return
-            
-            html = await response.text()
-            soup = BeautifulSoup(html, 'html.parser')
-            
-            # Statistiques de base
-            total_links = len(soup.find_all('a'))
-            total_divs = len(soup.find_all('div'))
-            
-            # Recherche d'éléments suspects
-            spectate_links = soup.find_all('a', href=re.compile(r'spectate|watch|view|live|game', re.I))
-            spectate_text = soup.find_all(text=re.compile(r'spectate|watch|live|in\s*game|playing', re.I))
-            
-            embed = discord.Embed(
-                title="🔍 Debug du site",
-                description=f"Analyse de: {url}",
-                color=0xFFAA00
-            )
-            
-            embed.add_field(name="📊 Statistiques", 
-                          value=f"Liens: {total_links}\nDivs: {total_divs}", 
-                          inline=True)
-            
-            embed.add_field(name="🎮 Éléments suspects", 
-                          value=f"Liens spectate: {len(spectate_links)}\nTexte spectate: {len(spectate_text)}", 
-                          inline=True)
-            
-            if spectate_links:
-                links_text = "\n".join([f"• {link.get('href', 'N/A')}" for link in spectate_links[:3]])
-                embed.add_field(name="🔗 Premiers liens", value=links_text, inline=False)
-            
-            await ctx.send(embed=embed)
-            
-    except Exception as e:
-        await ctx.send(f"❌ Erreur lors du debug: {e}")
-        logger.error(f"Erreur debug: {e}")
+    await message.edit(content="", embed=embed)
 
 @bot.command(name='lolhelp')
 async def lol_help(ctx):
     """Affiche l'aide pour les commandes LoL"""
     embed = discord.Embed(
         title="🎮 Aide du Bot LoL Monitor",
-        description="Commandes disponibles :",
+        description="Surveillez les parties LoL en cours sur OP.GG",
         color=0x0596AA
     )
-    embed.add_field(name="!addsite URL [nom] [sélecteur]", value="Ajouter un site à surveiller", inline=False)
-    embed.add_field(name="!removesite URL", value="Supprimer un site de la surveillance", inline=False)
-    embed.add_field(name="!listsites", value="Afficher les sites surveillés", inline=False)
-    embed.add_field(name="!testsite URL [sélecteur]", value="Tester un site pour voir les parties détectées", inline=False)
-    embed.add_field(name="!debug URL", value="Déboguer un site pour voir les éléments détectés", inline=False)
-    embed.set_footer(text="Le bot vérifie les sites toutes les 2 minutes")
+    
+    embed.add_field(
+        name="!addsite URL [nom]", 
+        value="Ajouter un profil OP.GG à surveiller\nExemple: `!addsite https://euw.op.gg/summoner/userName=Faker`", 
+        inline=False
+    )
+    embed.add_field(
+        name="!removesite [URL/nom]", 
+        value="Supprimer un site de la surveillance", 
+        inline=False
+    )
+    embed.add_field(
+        name="!listsites", 
+        value="Afficher tous les profils surveillés", 
+        inline=False
+    )
+    embed.add_field(
+        name="!testsite URL", 
+        value="Tester un profil OP.GG pour voir les parties détectées", 
+        inline=False
+    )
+    embed.add_field(
+        name="Réaction 👁️", 
+        value="Réagir avec 👁️ sur une notification pour obtenir le lien d'observation en privé", 
+        inline=False
+    )
+    
+    embed.set_footer(text="Le bot vérifie les profils toutes les 2 minutes")
     await ctx.send(embed=embed)
 
 @bot.event
@@ -558,36 +626,41 @@ async def on_command_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
         await ctx.send("❌ Vous n'avez pas les permissions nécessaires pour cette commande !")
     elif isinstance(error, commands.BadArgument):
-        await ctx.send("❌ Argument invalide ! Utilisez !lolhelp pour voir les commandes.")
+        await ctx.send("❌ Argument invalide ! Utilisez `!lolhelp` pour voir les commandes.")
     elif isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send("❌ Argument manquant ! Utilisez !lolhelp pour voir les commandes.")
+        await ctx.send("❌ Argument manquant ! Utilisez `!lolhelp` pour voir les commandes.")
     else:
-        logger.error(f"Erreur non gérée: {error}")
+        logger.error(f"Erreur de commande: {error}")
 
 @bot.event
 async def on_disconnect():
+    logger.info("Bot déconnecté")
     if check_lol_games.is_running():
         check_lol_games.cancel()
     await web_monitor.close()
 
 # === Lancement ===
-
 if __name__ == "__main__":
     token = os.getenv("DISCORD_BOT_TOKEN")
     if not token:
         print("❌ Le token Discord est manquant !")
         exit(1)
     
-    # Lancer Flask dans un thread séparé
-    flask_thread = Thread(target=run_flask)
-    flask_thread.daemon = True
-    flask_thread.start()
-    
-    # Lancer le bot
     try:
-        print(f"🚀 Connexion avec le token: {token[:10]}...")
+        print(f"🚀 Démarrage du bot...")
+        logger.info("Démarrage du bot Discord LoL Monitor")
+        
+        # Démarrer Flask dans un thread séparé
+        flask_thread = Thread(target=run_flask)
+        flask_thread.daemon = True
+        flask_thread.start()
+        
+        # Démarrer le bot Discord
         bot.run(token)
+        
     except discord.errors.LoginFailure:
         print("❌ Token Discord invalide !")
+        logger.error("Token Discord invalide")
     except Exception as e:
         logger.error(f"Erreur lors du lancement du bot: {e}")
+        print(f"❌ Erreur: {e}")
