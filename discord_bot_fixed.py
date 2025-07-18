@@ -63,16 +63,15 @@ def run_flask():
                             'Client-ID': TWITCH_CLIENT_ID,
                             'Authorization': f'Bearer {self.token}'
                         }
-                        self.token_expires_at = datetime.now(UTC).timestamp() + data.get('expires_in', 3600)
-                        logger.info("Token Twitch obtenu avec succès")
+                        self.token_expires_at = datetime.now(timezone.utc).timestamp() + data.get('expires_in', 3600)
+                        print("Token OK :", self.token)
                         return True
                     else:
-                        logger.error(f"Erreur lors de l'obtention du token Twitch: {response.status}")
+                        print("Erreur:", response.status)
                         return False
         except Exception as e:
-            logger.error(f"Exception lors de l'obtention du token Twitch: {e}")
+            print("Exception:", e)
             return False
-
         async def ensure_valid_token(self):
             if not self.token or (self.token_expires_at and datetime.now(UTC).timestamp() >= self.token_expires_at - 300):
                  pass
@@ -156,16 +155,15 @@ def run_flask():
                             'Client-ID': TWITCH_CLIENT_ID,
                             'Authorization': f'Bearer {self.token}'
                         }
-                        self.token_expires_at = datetime.now(UTC).timestamp() + data.get('expires_in', 3600)
-                        logger.info("Token Twitch obtenu avec succès")
+                        self.token_expires_at = datetime.now(timezone.utc).timestamp() + data.get('expires_in', 3600)
+                        print("Token OK :", self.token)
                         return True
                     else:
-                        logger.error(f"Erreur lors de l'obtention du token Twitch: {response.status}")
+                        print("Erreur:", response.status)
                         return False
         except Exception as e:
-            logger.error(f"Exception lors de l'obtention du token Twitch: {e}")
+            print("Exception:", e)
             return False
-
             async def ensure_valid_token(self):
                 if not self.token or (self.token_expires_at and datetime.now(UTC).timestamp() >= self.token_expires_at - 300):
                      pass
