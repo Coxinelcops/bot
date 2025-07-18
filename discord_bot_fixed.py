@@ -453,21 +453,6 @@ async def on_reaction_add(reaction, user):
                 if field.name.lower() == 'source' and field.value.startswith('http'):
                     await user.send(f'🔗 Voici le lien : {field.value}')
                     return
-
-@bot.event
-async def on_reaction_add(reaction, user):
-    if user.bot:
-        return
-    if str(reaction.emoji) == '👁️':
-        if reaction.message.embeds:
-            embed = reaction.message.embeds[0]
-            for field in embed.fields:
-                if field.name.lower() == 'source' and field.value.startswith('http'):
-                    try:
-                        await user.send(f'🔗 Voici le lien : {field.value}')
-                    except Exception as e:
-                        print(f"Erreur lors de l'envoi du DM : {e}")
-                    return
 if __name__ == "__main__":
     token = os.getenv("DISCORD_BOT_TOKEN")
     if not token:
