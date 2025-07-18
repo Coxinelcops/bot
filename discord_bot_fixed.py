@@ -441,6 +441,18 @@ async def on_disconnect():
     await web_monitor.close()
 
 # === Lancement ===
+
+@bot.event
+async def on_reaction_add(reaction, user):
+    if user.bot:
+        return
+    if str(reaction.emoji) == '👁️':
+        if reaction.message.embeds:
+            embed = reaction.message.embeds[0]
+            for field in embed.fields:
+                if field.name.lower() == 'source' and field.value.startswith('http'):
+                    await user.send(f'🔗 Voici le lien : {field.value}')
+                    return
 if __name__ == "__main__":
     token = os.getenv("DISCORD_BOT_TOKEN")
     if not token:
