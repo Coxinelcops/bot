@@ -460,8 +460,13 @@ if __name__ == "__main__":
     else:
         try:
             print(f"🚀 Connexion avec le token: {token[:10]}...")
-            bot.run(token)
         except discord.errors.LoginFailure:
             print("❌ Token Discord invalide !")
         except Exception as e:
             logger.error(f"Erreur lors du lancement du bot: {e}")
+
+from threading import Thread
+if __name__ == "__main__":
+    Thread(target=bot.run, args=(os.getenv("DISCORD_BOT_TOKEN"),)).start()
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
