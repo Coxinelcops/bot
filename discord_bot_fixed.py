@@ -44,45 +44,7 @@ class WebMonitor:
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         }
 
-    async def validate_active_game_indicator    async def find_active_game_indicators(self, soup):
-        """Renforcée : recherche uniquement d'éléments très probables d'une partie en cours"""
-        active_indicators = []
-
-        # 🔍 1. Classes courantes signalant une partie en cours
-        classes_indicatives = [
-            'in-game', 'live-game', 'currently-playing', 'match-live', 'game-active', 'spectate-active'
-        ]
-        for class_name in classes_indicatives:
-            elements = soup.find_all(attrs={'class': re.compile(rf"\b{re.escape(class_name)}\b", re.I)})
-            for el in elements:
-                if el not in active_indicators:
-                    active_indicators.append(el)
-
-        # 🔍 2. Boutons ou liens contenant "Spectate", "Observer" (mais éviter les exemples ou faux matchs)
-        spectate_keywords = re.compile(r'\b(spectate|observer|watch live|regarder)\b', re.I)
-        spectate_elements = soup.find_all(['a', 'button'], string=spectate_keywords)
-        for el in spectate_elements:
-            if el.get_text(strip=True).lower() not in ['demo', 'example', 'test']:
-                active_indicators.append(el)
-
-        # 🔍 3. Élément avec stats de jeu précises (KDA, CS, niveau)
-        stats_patterns = re.compile(r'(\d+/\d+/\d+|\d+\s*CS|level\s*\d+|\d+\s*KDA)', re.I)
-        stat_matches = soup.find_all(string=stats_patterns)
-        for s in stat_matches:
-            if s.parent not in active_indicators:
-                active_indicators.append(s.parent)
-
-        # 🔍 4. Sections contenant "live" et "game" dans le même bloc
-        combined_texts = soup.find_all(string=re.compile(r'live', re.I))
-        for t in combined_texts:
-            context = t.parent.get_text().lower() if t.parent else ""
-            if 'game' in context or 'match' in context or 'partie' in context:
-                if t.parent not in active_indicators:
-                    active_indicators.append(t.parent)
-
-        logger.info(f"🔍 {len(active_indicators)} indicateurs potentiels détectés")
-        return active_indicators
-(self element, soup, debug=False):
+    async def validate_active_game_indicator(self, element, soup, debug=False):
         logs = []
         try:
             element_text = element.get_text().strip().lower()
