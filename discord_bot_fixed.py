@@ -110,46 +110,65 @@ class WebMonitor:
             logger.error(f"Erreur lors de la détection live: {e}")
             return []
 
-  async def find_live_games_alternative(self, soup, base_url):
-    """Méthode alternative pour détecter les vraies parties live"""
-    try:
-        games = []
+    async def find_live_games_alternative(self, soup, base_url):
+        """Méthode alternative pour détecter les vraies parties live"""
+        try:
+            games = []
 
-        # 🔒 Étape 1 : Vérifier qu'on est sur une page LoL
-        if not soup or not soup.get_text():
+            # 🔒 Étape 1 : Vérifier qu'on est sur une page LoL
+            if not soup or not soup.get_text():
+                return []
+
+            page_text = soup.get_text().lower()
+            if "league of legends" not in page_text and "lol" not in page_text:
+                logger.info("❌ Pas de contexte LoL détecté → abandon détection alternative")
+                return []
+
+            # 🔍 Étape 2 : Recherche plus stricte
+
+            logger.info(f"🔍 Recherche de boutons spectate authentiques...")
+            spectate_buttons = soup.find_all(['button', 'a'], string=re.compile(r'spectate|watch live', re.I))
+            for button in spectate_buttons:
+                button_text = button.get_text().strip().lower()
+                if not any(bad in button_text for bad in ['demo', 'example', 'pro']):
+                    if any(stat in button_text for stat in ['level', 'rank', 'kda', 'cs', 'champion']):
+                        logger.info(f"🎯 Bouton spectate potentiellement valide: {button_text}")
+                        player_name = await self.extract_player_name_from_url(base_url)
+                        if player_name and player_name != "Joueur inconnu":
+                            game_info = {
+                                'title': f"🔴 Partie LIVE de {player_name}",
+                                'url': base_url,
+                                'player': player_name,
+                                'rank': "Non classé",
+                                'level': "?"
+                            }
+                            games.append(game_info)
+                            return games
+
+            logger.info("❌ Aucun indicateur de partie live authentique trouvé (alternative bloquée)")
+            return games
+
+        except Exception as e:
+            logger.error(f"Erreur dans find_live_games_alternative: {e}")
             return []
 
-        page_text = soup.get_text().lower()
-        if "league of legends" not in page_text and "lol" not in page_text:
-            logger.info("❌ Pas de contexte LoL détecté → abandon détection alternative")
-            return []
-
-        # 🔍 Étape 2 : Recherche plus stricte
-
-        logger.info(f"🔍 Recherche de boutons spectate authentiques...")
-        spectate_buttons = soup.find_all(['button', 'a'], string=re.compile(r'spectate|watch live', re.I))
-        for button in spectate_buttons:
-            button_text = button.get_text().strip().lower()
-            if not any(bad in button_text for bad in ['demo', 'example', 'pro']):
-                if any(stat in button_text for stat in ['level', 'rank', 'kda', 'cs', 'champion']):
-                    logger.info(f"🎯 Bouton spectate potentiellement valide: {button_text}")
-                    player_name = await self.extract_player_name_from_url(base_url)
-                    if player_name and player_name != "Joueur inconnu":
-                        game_info = {
-                            'title': f"🔴 Partie LIVE de {player_name}",
-                            'url': base_url,
-                            'player': player_name,
-                            'rank': "Non classé",
-                            'level': "?"
-                        }
-                        games.append(game_info)
-                        return games
-
-        logger.info("❌ Aucun indicateur de partie live authentique trouvé (alternative bloquée)")
-        return games
-
-    except Exception as e:
-        logger.error(f"Erreur dans find_live_games_alternative: {e}")
+    # Ajoutez ici les autres méthodes manquantes de la classe WebMonitor
+    async def find_active_game_indicators(self, soup):
+        """Trouve les indicateurs de jeu actif"""
+        # Implémentation à compléter
         return []
-
-
+    
+    async def validate_active_game_indicator(self, indicator, soup):
+        """Valide un indicateur de jeu actif"""
+        # Implémentation à compléter
+        return False
+    
+    async def extract_game_info_from_validated_element(self, indicator, base_url, soup):
+        """Extrait les informations de jeu depuis un élément validé"""
+        # Implémentation à compléter
+        return None
+    
+    async def extract_player_name_from_url(self, url):
+        """Extrait le nom du joueur depuis l'URL"""
+        # Implémentation à compléter
+        return "Joueur inconnu"
