@@ -30,7 +30,6 @@ logger = logging.getLogger(__name__)
 intents = discord.Intents.default()
 intents.message_content = True
 intents.guilds = True
-intents.reactions = True
 
 bot = commands.Bot(command_prefix='!', intents=intents)
 bot.ready_flag = False  # Évite relance multiple
@@ -38,7 +37,6 @@ bot.ready_flag = False  # Évite relance multiple
 # === Stockage des données ===
 monitored_sites = {}  # {channel_id: [{'url': str, 'selector': str, 'name': str}]}
 active_games = {}  # {channel_id: {game_id: message_id}}
-reaction_game_messages = {}  # {message_id: {'url': str, 'game_info': dict}}
 
 class WebMonitor:
     def __init__(self):
@@ -204,7 +202,9 @@ async def send_game_notification(channel, game, site_name):
         embed.add_field(name="📊 Niveau", value=game['level'], inline=True)
         embed.add_field(name="🌐 Source", value=site_name, inline=True)
         
-        embed.add_field(name="N/A", value="...", inline=False)
+        embed.add_field(
+            name="🔗 Lien d'observation", 
+            value=f"[Cliquez ici pour observer]({game['url']})", 
             inline=False
         )
         
@@ -217,11 +217,6 @@ async def send_game_notification(channel, game, site_name):
 
         # Stocker les informations
         active_games[channel.id][game['id']] = message.id
-        reaction_game_messages[message.id] = {
-            'url': game['url'],
-            'game_info': game,
-            'site_name': site_name
-        }
 
         logger.info(f"Notification envoyée pour une partie LoL dans {channel.name}")
 
@@ -241,22 +236,22 @@ async def cleanup_old_games():
             continue
 
         for game_id, message_id in games.items():
-            if message_id in reaction_game_messages:
-                game_info = reaction_game_messages[message_id]['game_info']
-                if current_time - game_info['timestamp'] > 1800:  # 30 minutes
-                    try:
-                        message = await channel.fetch_message(message_id)
-                        await message.delete()
-                        to_remove.append((channel_id, game_id, message_id))
-                    except discord.NotFound:
-                        to_remove.append((channel_id, game_id, message_id))
-                    except Exception as e:
-                        logger.error(f"Erreur lors de la suppression: {e}")
+            # Créer une info temporaire pour le timestamp
+            if current_time - datetime.now(UTC).timestamp() > 1800:  # 30 minutes
+                try:
+                    message = await channel.fetch_message(message_id)
+                    await message.delete()
+                    to_remove.append((channel_id, game_id, message_id))
+                except discord.NotFound:
+                    to_remove.append((channel_id, game_id, message_id))
+                except Exception as e:
+                    logger.error(f"Erreur lors de la suppression: {e}")
 
     # Supprimer les références
     for channel_id, game_id, message_id in to_remove:
         active_games[channel_id].pop(game_id, None)
-        reaction_game_messages.pop(message_id, None)
+
+# === Commandes ===
 
 @bot.command(name='addsite')
 @commands.has_permissions(manage_channels=True)
@@ -324,7 +319,7 @@ async def list_sites(ctx):
     )
 
     for site in monitored_sites[channel_id]:
-        embed.add_field(name="N/A", value="...", inline=False)
+        embed.add_field(
             name=site['name'],
             value=f"URL: {site['url']}\nSélecteur: {site['selector'] or 'Automatique'}",
             inline=False
@@ -354,7 +349,7 @@ async def test_site(ctx, url=None, selector=None):
     )
 
     for i, game in enumerate(games[:5]):  # Limiter à 5 résultats
-        embed.add_field(name="N/A", value="...", inline=False)
+        embed.add_field(
             name=f"Partie {i+1}",
             value=f"**{game['title']}**\nRang: {game['rank']}\nNiveau: {game['level']}\n[Lien]({game['url']})",
             inline=False
@@ -374,7 +369,6 @@ async def lol_help(ctx):
     embed.add_field(name="!removesite URL", value="Supprimer un site de la surveillance", inline=False)
     embed.add_field(name="!listsites", value="Afficher les sites surveillés", inline=False)
     embed.add_field(name="!testsite URL [sélecteur]", value="Tester un site pour voir les parties détectées", inline=False)
-    embed.add_field(name="Réaction 👁️", value="Réagir avec 👁️ sur une notification pour obtenir le lien", inline=False)
     embed.set_footer(text="Le bot vérifie les sites toutes les 2 minutes")
     await ctx.send(embed=embed)
 
