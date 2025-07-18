@@ -170,24 +170,22 @@ class TwitchAPI:
             url = "https://api.twitch.tv/helix/streams"
             params = {'user_login': usernames}
 
-            try:
-                async with aiohttp.ClientSession() as session:
-                async with session.get(url, headers=self.headers, params=params) as response:
-                if response.status == 200:
-                     pass
+         try:
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url, headers=self.headers, params=params) as response:
+            if response.status == 200:
                 data = await response.json()
                 return data['data']
             elif response.status == 401:
-                 pass
-            logger.warning("Token Twitch invalide, renouvellement...")
-            await self.get_token()
-            return await self.get_streams(usernames)
-        else:
-            logger.error(f"Erreur API Twitch streams: {response.status}")
-            return []
-        except Exception as e:
-            logger.error(f"Exception lors de la récupération des streams: {e}")
-            return []
+                logger.warning("Token Twitch invalide, renouvellement...")
+                await self.get_token()
+                return await self.get_streams(usernames)
+            else:
+                logger.error(f"Erreur API Twitch streams: {response.status}")
+                return []
+except Exception as e:
+    logger.error(f"Exception lors de la récupération des streams: {e}")
+    return []
 
     async def get_user_info(self, username):
         await self.ensure_valid_token()
