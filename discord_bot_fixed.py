@@ -205,6 +205,8 @@ async def send_game_notification(channel, game, site_name):
         embed.add_field(name="🌐 Source", value=site_name, inline=True)
         
         embed.add_field(
+            name="👁️ Observer", 
+            value="Réagissez avec 👁️ pour observer cette partie !", 
             inline=False
         )
         
@@ -214,6 +216,7 @@ async def send_game_notification(channel, game, site_name):
         embed.set_thumbnail(url="https://i.imgur.com/28W8RHN.png")  # Logo LoL
 
         message = await channel.send(embed=embed)
+        await message.add_reaction("👁️")
 
         # Stocker les informations
         active_games[channel.id][game['id']] = message.id
@@ -258,6 +261,198 @@ async def cleanup_old_games():
         active_games[channel_id].pop(game_id, None)
         reaction_game_messages.pop(message_id, None)
 
+@bot.event
+async def on_reaction_add(reaction, user):
+    """Gère les réactions pour observer les parties"""
+    if user.bot:
+        return
+
+    message_id = reaction.message.id
+    if message_id not in reaction_game_messages:
+        return
+
+    # Vérifier si c'est la bonne réaction
+    if str(reaction.emoji) != "👁️":
+        return
+
+    game_data = reaction_game_messages[message_id]
+    
+    try:
+        # Envoyer le lien en DM
+        embed = discord.Embed(
+            title="🎮 Lien d'observation LoL",
+            description=f"Voici le lien pour observer la partie :",
+            color=0x0596AA
+        )
+        embed.add_field(name="🔗 Lien", value=f"[Cliquez ici pour observer]({game_data['url']})", inline=False)
+        embed.add_field(name="📋 URL", value=game_data['url'], inline=False)
+        embed.set_footer(text=f"Source: {game_data['site_name']}")
+
+        await user.send(embed=embed)
+        logger.info(f"Lien envoyé à {user.name} pour observer une partie LoL")
+
+    except discord.Forbidden:
+        # Si on ne peut pas envoyer en DM, répondre dans le channel
+        try:
+            await reaction.message.channel.send(
+                f"{user.mention}, voici le lien pour observer: {game_data['url']}", 
+                delete_after=30
+            )
+        except Exception as e:
+            logger.error(f"Erreur lors de l'envoi du lien: {e}")
+
+# === Commandes ===
+
+@bot.command(name='addsite')
+@commands.has_permissions(manage_channels=True)
+async def add_site(ctx, url=None, name=None, selector=None):
+    """Ajoute un site à surveiller pour des parties LoL"""
+    if not url:
+        await ctx.send("❌ Veuillez spécifier une URL !\nExemple: `!addsite https://example.com \"Mon Site\" \".game-link\"`")
+        return
+
+    if not name:
+        name = url
+
+    channel_id = ctx.channel.id
+    if channel_id not in monitored_sites:
+        monitored_sites[channel_id] = []
+
+    # Vérifier si le site existe déjà
+    for site in monitored_sites[channel_id]:
+        if site['url'] == url:
+            await ctx.send(f"❌ Ce site est déjà surveillé !")
+            return
+
+    site_data = {
+        'url': url,
+        'name': name,
+        'selector': selector
+    }
+
+    monitored_sites[channel_id].append(site_data)
+    await ctx.send(f"✅ Site ajouté à la surveillance : **{name}**")
+
+@bot.command(name='removesite')
+@commands.has_permissions(manage_channels=True)
+async def remove_site(ctx, url=None):
+    """Supprime un site de la surveillance"""
+    if not url:
+        await ctx.send("❌ Veuillez spécifier l'URL du site à supprimer !")
+        return
+
+    channel_id = ctx.channel.id
+    if channel_id not in monitored_sites:
+        await ctx.send("❌ Aucun site surveillé dans ce channel !")
+        return
+
+    for i, site in enumerate(monitored_sites[channel_id]):
+        if site['url'] == url:
+            removed_site = monitored_sites[channel_id].pop(i)
+            await ctx.send(f"✅ Site supprimé : **{removed_site['name']}**")
+            return
+
+    await ctx.send("❌ Site non trouvé dans la liste !")
+
+@bot.command(name='listsites')
+async def list_sites(ctx):
+    """Affiche la liste des sites surveillés"""
+    channel_id = ctx.channel.id
+
+    if channel_id not in monitored_sites or not monitored_sites[channel_id]:
+        await ctx.send("📋 Aucun site surveillé dans ce channel !")
+        return
+
+    embed = discord.Embed(
+        title="📋 Sites surveillés",
+        color=0x0596AA
+    )
+
+    for site in monitored_sites[channel_id]:
+        embed.add_field(
+            name=site['name'],
+            value=f"URL: {site['url']}\nSélecteur: {site['selector'] or 'Automatique'}",
+            inline=False
+        )
+
+    await ctx.send(embed=embed)
+
+@bot.command(name='testsite')
+@commands.has_permissions(manage_channels=True)
+async def test_site(ctx, url=None, selector=None):
+    """Test un site pour voir les parties détectées"""
+    if not url:
+        await ctx.send("❌ Veuillez spécifier une URL à tester !")
+        return
+
+    await ctx.send("🔍 Test du site en cours...")
+
+    games = await web_monitor.check_site(url, selector)
+    
+    if not games:
+        await ctx.send("❌ Aucune partie détectée sur ce site.")
+        return
+
+    embed = discord.Embed(
+        title=f"🎮 Parties détectées ({len(games)})",
+        color=0x0596AA
+    )
+
+    for i, game in enumerate(games[:5]):  # Limiter à 5 résultats
+        embed.add_field(
+            name=f"Partie {i+1}",
+            value=f"**{game['title']}**\nRang: {game['rank']}\nNiveau: {game['level']}\n[Lien]({game['url']})",
+            inline=False
+        )
+
+    await ctx.send(embed=embed)
+
+@bot.command(name='lolhelp')
+async def lol_help(ctx):
+    """Affiche l'aide pour les commandes LoL"""
+    embed = discord.Embed(
+        title="🎮 Aide du Bot LoL Monitor",
+        description="Commandes disponibles :",
+        color=0x0596AA
+    )
+    embed.add_field(name="!addsite URL [nom] [sélecteur]", value="Ajouter un site à surveiller", inline=False)
+    embed.add_field(name="!removesite URL", value="Supprimer un site de la surveillance", inline=False)
+    embed.add_field(name="!listsites", value="Afficher les sites surveillés", inline=False)
+    embed.add_field(name="!testsite URL [sélecteur]", value="Tester un site pour voir les parties détectées", inline=False)
+    embed.add_field(name="Réaction 👁️", value="Réagir avec 👁️ sur une notification pour obtenir le lien", inline=False)
+    embed.set_footer(text="Le bot vérifie les sites toutes les 2 minutes")
+    await ctx.send(embed=embed)
+
+@bot.event
+async def on_command_error(ctx, error):
+    if isinstance(error, commands.MissingPermissions):
+        await ctx.send("❌ Vous n'avez pas les permissions nécessaires pour cette commande !")
+    elif isinstance(error, commands.BadArgument):
+        await ctx.send("❌ Argument invalide ! Utilisez !lolhelp pour voir les commandes.")
+    elif isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send("❌ Argument manquant ! Utilisez !lolhelp pour voir les commandes.")
+    else:
+        logger.error(f"Erreur non gérée: {error}")
+
+@bot.event
+async def on_disconnect():
+    if check_lol_games.is_running():
+        check_lol_games.cancel()
+    await web_monitor.close()
+
+# === Lancement ===
+
+@bot.event
+async def on_reaction_add(reaction, user):
+    if user.bot:
+        return
+    if str(reaction.emoji) == '👁️':
+        if reaction.message.embeds:
+            embed = reaction.message.embeds[0]
+            for field in embed.fields:
+                if field.name.lower() == 'source' and field.value.startswith('http'):
+                    await user.send(f'🔗 Voici le lien : {field.value}')
+                    return
 if __name__ == "__main__":
     token = os.getenv("DISCORD_BOT_TOKEN")
     if not token:
