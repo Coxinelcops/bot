@@ -45,6 +45,11 @@ class TwitchAPI:
         self.token = None
         self.headers = {}
         self.token_expires_at = None
+
+    def __init__(self):
+        self.token = None
+        self.headers = {}
+        self.token_expires_at = None
     async def get_token(self):
         url = "https://id.twitch.tv/oauth2/token"
         params = {
@@ -52,6 +57,7 @@ class TwitchAPI:
             'client_secret': TWITCH_CLIENT_SECRET,
             'grant_type': 'client_credentials'
         }
+        try:
             async with aiohttp.ClientSession() as session:
                 async with session.post(url, params=params) as response:
                     if response.status == 200:
@@ -67,8 +73,10 @@ class TwitchAPI:
                     else:
                         logger.error(f"Erreur lors de l'obtention du token Twitch: {response.status}")
                         return False
+        except Exception as e:
             logger.error(f"Exception lors de l'obtention du token Twitch: {e}")
             return False
+
     async def ensure_valid_token(self):
         if not self.token or (self.token_expires_at and datetime.now(UTC).timestamp() >= self.token_expires_at - 300):
             await self.get_token()
