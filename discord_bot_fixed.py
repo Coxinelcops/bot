@@ -211,7 +211,6 @@ async def send_game_notification(channel, game, site_name):
         # Ajouter une image si disponible
         embed.set_thumbnail(url="https://i.imgur.com/28W8RHN.png")  # Logo LoL
 
-        message = await channel.send(embed=embed)
         await message.add_reaction("👁️")
 
         # Stocker les informations
@@ -453,3 +452,23 @@ if __name__ == "__main__":
             print("❌ Token Discord invalide !")
         except Exception as e:
             logger.error(f"Erreur lors du lancement du bot: {e}")
+
+
+@bot.event
+async def on_reaction_add(reaction, user):
+    if user.bot:
+        return
+    emoji = str(reaction.emoji)
+    if emoji == '🔗':
+        if reaction.message.embeds:
+            return  # Already has embed
+        content = reaction.message.content
+        if 'http' in content:
+            embed = discord.Embed(description=f'[🔗 Ouvrir le site]({content})', color=0x00ff00)
+            await reaction.message.edit(embed=embed, content='')
+    elif emoji == '🔍':
+        embed = reaction.message.embeds[0] if reaction.message.embeds else None
+        if embed:
+            for field in embed.fields:
+                if field.name.lower() == 'source' and field.value.startswith('http'):
+                    await reaction.message.channel.send(f'🔗 Voici le lien : {field.value}')
