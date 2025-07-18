@@ -32,6 +32,7 @@ intents.guilds = True
 intents.reactions = True
 
 bot = commands.Bot(command_prefix='!', intents=intents)
+bot.ready_flag = False  # Évite relance multiple
 
 # === Stockage des données ===
 monitored_sites = {}  # {channel_id: [{'url': str, 'selector': str, 'name': str}]}
@@ -146,9 +147,11 @@ web_monitor = WebMonitor()
 
 @bot.event
 async def on_ready():
-    print(f'{bot.user} est connecté et prêt !')
+    if not getattr(bot, "ready_flag", False):
+        print(f'{bot.user} est connecté et prêt !')
     if not check_lol_games.is_running():
         check_lol_games.start()
+        bot.ready_flag = True
 
 @tasks.loop(minutes=2)  # Vérification toutes les 2 minutes
 async def check_lol_games():
