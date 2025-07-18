@@ -1,4 +1,4 @@
- import discord
+import discord
 from discord.ext import commands, tasks
 import aiohttp
 import json
@@ -456,14 +456,6 @@ async def delete_command_messages(ctx, response_message=None):
         pass
 
 # === Commandes LoL ===
-@bot.command(name='addlol')
-@commands.has_permissions(manage_channels=True)
-async def add_lol_player(ctx, summoner_name=None, region='euw'):
-    """Ajoute un joueur LoL à surveiller"""
-    if summoner_name is None:
-        response = await ctx.send("❌ Veuillez spécifier un nom d'invocateur !\nExemple: `!addlol Faker`")
-        asyncio.create_task(delete_command_messages(ctx, response))
-        return
 
     channel_id = ctx.channel.id
     summoner_name = summoner_name.strip()
@@ -491,14 +483,6 @@ async def add_lol_player(ctx, summoner_name=None, region='euw'):
     response = await ctx.send(f"✅ {summoner_name} ajouté à la liste des joueurs LoL surveillés !")
     asyncio.create_task(delete_command_messages(ctx, response))
 
-@bot.command(name='removelol')
-@commands.has_permissions(manage_channels=True)
-async def remove_lol_player(ctx, summoner_name=None):
-    """Retire un joueur LoL de la surveillance"""
-    if summoner_name is None:
-        response = await ctx.send("❌ Veuillez spécifier un nom d'invocateur !")
-        asyncio.create_task(delete_command_messages(ctx, response))
-        return
 
     channel_id = ctx.channel.id
     summoner_name = summoner_name.strip()
@@ -536,10 +520,6 @@ async def remove_lol_player(ctx, summoner_name=None):
     response = await ctx.send(f"✅ {player_to_remove} retiré de la liste des joueurs LoL surveillés !")
     asyncio.create_task(delete_command_messages(ctx, response))
 
-@bot.command(name='listlol')
-async def list_lol_players(ctx):
-    """Affiche la liste des joueurs LoL surveillés"""
-    channel_id = ctx.channel.id
 
     if channel_id not in lol_players or not lol_players[channel_id]:
         await ctx.send("📋 Aucun joueur LoL surveillé dans ce channel !")
@@ -553,11 +533,6 @@ async def list_lol_players(ctx):
     embed.set_footer(text="League of Legends • OP.GG")
     await ctx.send(embed=embed)
 
-@bot.command(name='lolping')
-@commands.has_permissions(manage_roles=True)
-async def set_lol_ping_role(ctx, role: discord.Role = None):
-    """Définit le rôle à ping pour les notifications LoL"""
-    channel_id = ctx.channel.id
 
     if role is None:
         if channel_id in lol_ping_roles:
@@ -569,13 +544,6 @@ async def set_lol_ping_role(ctx, role: discord.Role = None):
     await ctx.send(f"✅ Le rôle {role.mention} sera ping lors des notifications LoL !")
 
 # === Commandes Twitch existantes ===
-@bot.command(name='addstreamer')
-@commands.has_permissions(manage_channels=True)
-async def add_streamer(ctx, username=None):
-    if username is None:
-        response = await ctx.send("❌ Veuillez spécifier un nom d'utilisateur Twitch !")
-        asyncio.create_task(delete_command_messages(ctx, response))
-        return
 
     channel_id = ctx.channel.id
     username = username.lower().replace('@', '').strip()
@@ -603,13 +571,6 @@ async def add_streamer(ctx, username=None):
     response = await ctx.send(f"✅ {username} ajouté à la liste des streamers surveillés !")
     asyncio.create_task(delete_command_messages(ctx, response))
 
-@bot.command(name='addstreamers')
-@commands.has_permissions(manage_channels=True)
-async def add_streamers(ctx, *usernames):
-    if not usernames:
-        response = await ctx.send("❌ Veuillez spécifier au moins un nom d'utilisateur Twitch !\nExemple: `!addstreamers streamer1 streamer2 streamer3`")
-        asyncio.create_task(delete_command_messages(ctx, response))
-        return
 
     channel_id = ctx.channel.id
     if channel_id not in streamers:
@@ -654,13 +615,6 @@ async def add_streamers(ctx, *usernames):
     response = await ctx.send("\n".join(message_parts))
     asyncio.create_task(delete_command_messages(ctx, response))
 
-@bot.command(name='removestreamer')
-@commands.has_permissions(manage_channels=True)
-async def remove_streamer(ctx, username=None):
-    if username is None:
-        response = await ctx.send("❌ Veuillez spécifier un nom d'utilisateur Twitch !")
-        asyncio.create_task(delete_command_messages(ctx, response))
-        return
 
     channel_id = ctx.channel.id
     username = username.lower().replace('@', '').strip()
@@ -685,9 +639,6 @@ async def remove_streamer(ctx, username=None):
     response = await ctx.send(f"✅ {username} retiré de la liste des streamers surveillés !")
     asyncio.create_task(delete_command_messages(ctx, response))
 
-@bot.command(name='liststreamer')
-async def list_streamers(ctx):
-    channel_id = ctx.channel.id
 
     if channel_id not in streamers or not streamers[channel_id]:
         await ctx.send("📋 Aucun streamer surveillé dans ce channel !")
@@ -700,10 +651,6 @@ async def list_streamers(ctx):
     )
     await ctx.send(embed=embed)
 
-@bot.command(name='pingrole')
-@commands.has_permissions(manage_roles=True)
-async def set_ping_role(ctx, role: discord.Role = None):
-    channel_id = ctx.channel.id
 
     if role is None:
         if channel_id in ping_roles:
@@ -714,13 +661,6 @@ async def set_ping_role(ctx, role: discord.Role = None):
     ping_roles[channel_id] = role.id
     await ctx.send(f"✅ Le rôle {role.mention} sera ping lors des notifications Twitch !")
 
-@bot.command(name='reactionrole')
-@commands.has_permissions(manage_roles=True)
-async def create_reaction_role(ctx, role: discord.Role = None, emoji: str = "🔔"):
-    """Crée un message sur lequel les utilisateurs peuvent réagir pour obtenir un rôle"""
-    if role is None:
-        await ctx.send("❌ Veuillez spécifier un rôle !\nExemple: `!reactionrole @Notifications 🔔`")
-        return
 
     # Créer l'embed pour le message de réaction
     embed = discord.Embed(
@@ -842,14 +782,6 @@ async def on_reaction_remove(reaction, user):
     except Exception as e:
         logger.error(f"Erreur lors du retrait du rôle: {e}")
 
-@bot.command(name='help')
-async def bot_help(ctx):
-    """Affiche toutes les commandes disponibles"""
-    embed = discord.Embed(
-        title="🤖 Aide du Bot Multi-Fonctions",
-        description="Toutes les commandes disponibles :",
-        color=0x00ff00
-    )
     
     # Commandes Twitch
     embed.add_field(
@@ -900,46 +832,7 @@ async def bot_help(ctx):
     embed.set_footer(text="Bot créé pour surveiller Twitch et League of Legends")
     await ctx.send(embed=embed)
 
-@bot.command(name='streamhelp')
-async def stream_help(ctx):
-    """Aide spécifique pour les commandes Twitch (rétrocompatibilité)"""
-    embed = discord.Embed(
-        title="📺 Aide Twitch",
-        description="Commandes Twitch disponibles :",
-        color=0x9146ff
-    )
-    embed.add_field(name="!addstreamer <username>", value="Ajouter un streamer à surveiller", inline=False)
-    embed.add_field(name="!addstreamers <user1> <user2> ...", value="Ajouter plusieurs streamers d'un coup", inline=False)
-    embed.add_field(name="!removestreamer <username>", value="Retirer un streamer de la surveillance", inline=False)
-    embed.add_field(name="!liststreamer", value="Afficher la liste des streamers surveillés", inline=False)
-    embed.add_field(name="!pingrole [@role]", value="Définir le rôle à ping (sans rôle = désactiver)", inline=False)
-    embed.set_footer(text="Les commandes addstreamer et removestreamer s'auto-suppriment après 5 secondes")
-    await ctx.send(embed=embed)
 
-@bot.command(name='lolhelp')
-async def lol_help(ctx):
-    """Aide spécifique pour les commandes LoL"""
-    embed = discord.Embed(
-        title="🎮 Aide League of Legends",
-        description="Commandes LoL disponibles :",
-        color=0x0f2027
-    )
-    embed.add_field(name="!addlol <summoner>", value="Ajouter un joueur LoL à surveiller", inline=False)
-    embed.add_field(name="!removelol <summoner>", value="Retirer un joueur LoL de la surveillance", inline=False)
-    embed.add_field(name="!listlol", value="Afficher la liste des joueurs LoL surveillés", inline=False)
-    embed.add_field(name="!lolping [@role]", value="Définir le rôle à ping LoL (sans rôle = désactiver)", inline=False)
-    embed.add_field(
-        name="ℹ️ **Fonctionnalités**",
-        value=(
-            "• Surveillance via OP.GG\n"
-            "• Notifications avec réaction 👁️ pour spectate rapide\n"
-            "• Région par défaut: EUW\n"
-            "• Vérification toutes les 2 minutes"
-        ),
-        inline=False
-    )
-    embed.set_footer(text="Les commandes s'auto-suppriment après 5 secondes")
-    await ctx.send(embed=embed)
 
 @bot.event
 async def on_command_error(ctx, error):
@@ -967,6 +860,116 @@ async def on_disconnect():
     await opgg_api.close_session()
 
 # === Lancement ===
+
+# === Commandes ===
+@bot.command(name='addlol')
+@commands.has_permissions(manage_channels=True)
+async def add_lol_player(ctx, summoner_name=None, region='euw'):
+    """Ajoute un joueur LoL à surveiller"""
+    if summoner_name is None:
+        response = await ctx.send("❌ Veuillez spécifier un nom d'invocateur !\nExemple: `!addlol Faker`")
+        asyncio.create_task(delete_command_messages(ctx, response))
+        return
+@bot.command(name='removelol')
+@commands.has_permissions(manage_channels=True)
+async def remove_lol_player(ctx, summoner_name=None):
+    """Retire un joueur LoL de la surveillance"""
+    if summoner_name is None:
+        response = await ctx.send("❌ Veuillez spécifier un nom d'invocateur !")
+        asyncio.create_task(delete_command_messages(ctx, response))
+        return
+@bot.command(name='listlol')
+async def list_lol_players(ctx):
+    """Affiche la liste des joueurs LoL surveillés"""
+    channel_id = ctx.channel.id
+@bot.command(name='lolping')
+@commands.has_permissions(manage_roles=True)
+async def set_lol_ping_role(ctx, role: discord.Role = None):
+    """Définit le rôle à ping pour les notifications LoL"""
+    channel_id = ctx.channel.id
+@bot.command(name='addstreamer')
+@commands.has_permissions(manage_channels=True)
+async def add_streamer(ctx, username=None):
+    if username is None:
+        response = await ctx.send("❌ Veuillez spécifier un nom d'utilisateur Twitch !")
+        asyncio.create_task(delete_command_messages(ctx, response))
+        return
+@bot.command(name='addstreamers')
+@commands.has_permissions(manage_channels=True)
+async def add_streamers(ctx, *usernames):
+    if not usernames:
+        response = await ctx.send("❌ Veuillez spécifier au moins un nom d'utilisateur Twitch !\nExemple: `!addstreamers streamer1 streamer2 streamer3`")
+        asyncio.create_task(delete_command_messages(ctx, response))
+        return
+@bot.command(name='removestreamer')
+@commands.has_permissions(manage_channels=True)
+async def remove_streamer(ctx, username=None):
+    if username is None:
+        response = await ctx.send("❌ Veuillez spécifier un nom d'utilisateur Twitch !")
+        asyncio.create_task(delete_command_messages(ctx, response))
+        return
+@bot.command(name='liststreamer')
+async def list_streamers(ctx):
+    channel_id = ctx.channel.id
+@bot.command(name='pingrole')
+@commands.has_permissions(manage_roles=True)
+async def set_ping_role(ctx, role: discord.Role = None):
+    channel_id = ctx.channel.id
+@bot.command(name='reactionrole')
+@commands.has_permissions(manage_roles=True)
+async def create_reaction_role(ctx, role: discord.Role = None, emoji: str = "🔔"):
+    """Crée un message sur lequel les utilisateurs peuvent réagir pour obtenir un rôle"""
+    if role is None:
+        await ctx.send("❌ Veuillez spécifier un rôle !\nExemple: `!reactionrole @Notifications 🔔`")
+        return
+@bot.command(name='help')
+async def bot_help(ctx):
+    """Affiche toutes les commandes disponibles"""
+    embed = discord.Embed(
+        title="🤖 Aide du Bot Multi-Fonctions",
+        description="Toutes les commandes disponibles :",
+        color=0x00ff00
+    )
+@bot.command(name='streamhelp')
+async def stream_help(ctx):
+    """Aide spécifique pour les commandes Twitch (rétrocompatibilité)"""
+    embed = discord.Embed(
+        title="📺 Aide Twitch",
+        description="Commandes Twitch disponibles :",
+        color=0x9146ff
+    )
+    embed.add_field(name="!addstreamer <username>", value="Ajouter un streamer à surveiller", inline=False)
+    embed.add_field(name="!addstreamers <user1> <user2> ...", value="Ajouter plusieurs streamers d'un coup", inline=False)
+    embed.add_field(name="!removestreamer <username>", value="Retirer un streamer de la surveillance", inline=False)
+    embed.add_field(name="!liststreamer", value="Afficher la liste des streamers surveillés", inline=False)
+    embed.add_field(name="!pingrole [@role]", value="Définir le rôle à ping (sans rôle = désactiver)", inline=False)
+    embed.set_footer(text="Les commandes addstreamer et removestreamer s'auto-suppriment après 5 secondes")
+    await ctx.send(embed=embed)
+@bot.command(name='lolhelp')
+async def lol_help(ctx):
+    """Aide spécifique pour les commandes LoL"""
+    embed = discord.Embed(
+        title="🎮 Aide League of Legends",
+        description="Commandes LoL disponibles :",
+        color=0x0f2027
+    )
+    embed.add_field(name="!addlol <summoner>", value="Ajouter un joueur LoL à surveiller", inline=False)
+    embed.add_field(name="!removelol <summoner>", value="Retirer un joueur LoL de la surveillance", inline=False)
+    embed.add_field(name="!listlol", value="Afficher la liste des joueurs LoL surveillés", inline=False)
+    embed.add_field(name="!lolping [@role]", value="Définir le rôle à ping LoL (sans rôle = désactiver)", inline=False)
+    embed.add_field(
+        name="ℹ️ **Fonctionnalités**",
+        value=(
+            "• Surveillance via OP.GG\n"
+            "• Notifications avec réaction 👁️ pour spectate rapide\n"
+            "• Région par défaut: EUW\n"
+            "• Vérification toutes les 2 minutes"
+        ),
+        inline=False
+    )
+    embed.set_footer(text="Les commandes s'auto-suppriment après 5 secondes")
+    await ctx.send(embed=embed)
+
 if __name__ == "__main__":
     Thread(target=run_flask).start()
     token = os.getenv("DISCORD_BOT_TOKEN")
