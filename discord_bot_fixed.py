@@ -204,7 +204,7 @@ async def send_game_notification(channel, game, site_name):
         embed.add_field(name="📊 Niveau", value=game['level'], inline=True)
         embed.add_field(name="🌐 Source", value=site_name, inline=True)
         
-        embed.add_field(
+        embed.add_field(name="N/A", value="...", inline=False)
             inline=False
         )
         
@@ -324,7 +324,7 @@ async def list_sites(ctx):
     )
 
     for site in monitored_sites[channel_id]:
-        embed.add_field(
+        embed.add_field(name="N/A", value="...", inline=False)
             name=site['name'],
             value=f"URL: {site['url']}\nSélecteur: {site['selector'] or 'Automatique'}",
             inline=False
@@ -354,7 +354,7 @@ async def test_site(ctx, url=None, selector=None):
     )
 
     for i, game in enumerate(games[:5]):  # Limiter à 5 résultats
-        embed.add_field(
+        embed.add_field(name="N/A", value="...", inline=False)
             name=f"Partie {i+1}",
             value=f"**{game['title']}**\nRang: {game['rank']}\nNiveau: {game['level']}\n[Lien]({game['url']})",
             inline=False
