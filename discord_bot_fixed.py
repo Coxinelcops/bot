@@ -442,7 +442,6 @@ async def on_disconnect():
 
 # === Lancement ===
 if __name__ == "__main__":
-    Thread(target=run_flask).start()
     token = os.getenv("DISCORD_BOT_TOKEN")
     if not token:
         print("❌ Le token Discord est manquant !")
