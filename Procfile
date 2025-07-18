@@ -1,1 +1,1 @@
-web: python3 discord_bot_fixed.py
+web: python discord_bot_fixed.py
