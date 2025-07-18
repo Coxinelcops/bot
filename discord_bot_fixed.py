@@ -131,44 +131,60 @@ class TwitchAPI:
             self.token_expires_at = None
 
     async def get_token(self):
-        url = "https://id.twitch.tv/oauth2/token"
-        params = {
-            'client_id': TWITCH_CLIENT_ID,
-            'client_secret': TWITCH_CLIENT_SECRET,
-            'grant_type': 'client_credentials'
-        }
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, params=params) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        self.token = data['access_token']
-                        self.headers = {
-                            'Client-ID': TWITCH_CLIENT_ID,
-                            'Authorization': f'Bearer {self.token}'
-                        }
-                        self.token_expires_at = datetime.now(timezone.utc).timestamp() + data.get('expires_in', 3600)
-                        print("Token OK :", self.token)
-                        return True
-                    else:
-                        print("Erreur:", response.status)
-                        return False
-        except Exception as e:
-            print("Exception:", e)
-            return False
-        async def ensure_valid_token(self):
-            if not self.token or (self.token_expires_at and datetime.now(UTC).timestamp() >= self.token_expires_at - 300):
-                 pass
-            await self.get_token()
+    url = "https://id.twitch.tv/oauth2/token"
+    params = {
+        'client_id': TWITCH_CLIENT_ID,
+        'client_secret': TWITCH_CLIENT_SECRET,
+        'grant_type': 'client_credentials'
+    }
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, params=params) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    self.token = data['access_token']
+                    self.headers = {
+                        'Client-ID': TWITCH_CLIENT_ID,
+                        'Authorization': f'Bearer {self.token}'
+                    }
+                    self.token_expires_at = datetime.now(timezone.utc).timestamp() + data.get('expires_in', 3600)
+                    print("Token OK :", self.token)
+                    return True
+                else:
+                    print("Erreur:", response.status)
+                    return False
+    except Exception as e:
+        print("Exception:", e)
+        return False
 
-            async def get_streams(self, usernames):
-                if not usernames:
-                     pass
-                return []
+async def ensure_valid_token(self):
+    if not self.token or (self.token_expires_at and datetime.now(timezone.utc).timestamp() >= self.token_expires_at - 300):
+        await self.get_token()
 
-            await self.ensure_valid_token()
-            url = "https://api.twitch.tv/helix/streams"
-            params = {'user_login': usernames}
+async def get_streams(self, usernames):
+    if not usernames:
+        return []
+    
+    await self.ensure_valid_token()
+    url = "https://api.twitch.tv/helix/streams"
+    params = {'user_login': usernames}
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=self.headers, params=params) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    return data['data']
+                elif response.status == 401:
+                    logger.warning("Token Twitch invalide, renouvellement...")
+                    await self.get_token()
+                    return await self.get_streams(usernames)
+                else:
+                    logger.error(f"Erreur API Twitch streams: {response.status}")
+                    return []
+    except Exception as e:
+        logger.error(f"Exception lors de la récupération des streams: {e}")
+        return []
 
          try:
     async with aiohttp.ClientSession() as session:
