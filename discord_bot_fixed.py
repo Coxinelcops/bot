@@ -46,6 +46,89 @@ class TwitchAPI:
         self.headers = {}
         self.token_expires_at = None
 
+    async def get_token(self):
+        url = "https://id.twitch.tv/oauth2/token"
+        params = {
+            'client_id': TWITCH_CLIENT_ID,
+            'client_secret': TWITCH_CLIENT_SECRET,
+            'grant_type': 'client_credentials'
+        }
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, params=params) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        self.token = data['access_token']
+                        self.headers = {
+                            'Client-ID': TWITCH_CLIENT_ID,
+                            'Authorization': f'Bearer {self.token}'
+                        }
+                        self.token_expires_at = datetime.now(UTC).timestamp() + data.get('expires_in', 3600)
+                        logger.info("Token Twitch obtenu avec succès")
+                        return True
+                    else:
+                        logger.error(f"Erreur lors de l'obtention du token Twitch: {response.status}")
+                        return False
+        except Exception as e:
+            logger.error(f"Exception lors de l'obtention du token Twitch: {e}")
+            return False
+
+    async def ensure_valid_token(self):
+        if not self.token or (self.token_expires_at and datetime.now(UTC).timestamp() >= self.token_expires_at - 300):
+            await self.get_token()
+
+    async def get_streams(self, usernames):
+        if not usernames:
+            return []
+
+        await self.ensure_valid_token()
+        url = "https://api.twitch.tv/helix/streams"
+        params = {'user_login': usernames}
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, headers=self.headers, params=params) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        return data['data']
+                    elif response.status == 401:
+                        logger.warning("Token Twitch invalide, renouvellement...")
+                        await self.get_token()
+                        return await self.get_streams(usernames)
+                    else:
+                        logger.error(f"Erreur API Twitch streams: {response.status}")
+                        return []
+        except Exception as e:
+            logger.error(f"Exception lors de la récupération des streams: {e}")
+            return []
+
+    async def get_user_info(self, username):
+        await self.ensure_valid_token()
+        url = "https://api.twitch.tv/helix/users"
+        params = {'login': username}
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, headers=self.headers, params=params) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        return data['data'][0] if data['data'] else None
+                    elif response.status == 401:
+                        logger.warning("Token Twitch invalide, renouvellement...")
+                        await self.get_token()
+                        return await self.get_user_info(username)
+                    else:
+                        logger.error(f"Erreur API Twitch user: {response.status}")
+                        return None
+        except Exception as e:
+            logger.error(f"Exception lors de la récupération de l'utilisateur: {e}")
+            return None
+
+    def __init__(self):
+        self.token = None
+        self.headers = {}
+        self.token_expires_at = None
+
     def __init__(self):
         self.token = None
         self.headers = {}
