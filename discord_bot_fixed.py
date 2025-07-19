@@ -46,27 +46,28 @@ class WebMonitorFixed:
                             logger.info("⚠️ Détection dupliquée ignorée")
 
             
-            # 🔄 GESTION DES ABSENCES : vérification glissante
-            if not games:
-                if base_url not in self.absence_counter:
-                    self.absence_counter[base_url] = 1
-                else:
-                    self.absence_counter[base_url] += 1
 
-                logger.info(f"⚠️ Absence détectée pour {base_url} ({self.absence_counter[base_url]}x)")
-
-                if self.absence_counter[base_url] >= self.ABSENCE_THRESHOLD:
-                    logger.warning(f"🚨 Absence CONFIRMÉE après {self.ABSENCE_THRESHOLD} tentatives pour {base_url}")
-                    # ← ici tu peux déclencher la logique de notification d'absence
-                    # ex: send_absence_alert(base_url)
-
-                    # Réinitialise après alerte
-                    self.absence_counter[base_url] = 0
+        # 🔄 GESTION DES ABSENCES : vérification glissante
+        if not games:
+            if base_url not in self.absence_counter:
+                self.absence_counter[base_url] = 1
             else:
-                # Réinitialise si on a de nouveau une détection
-                self.absence_counter[base_url] = 0
+                self.absence_counter[base_url] += 1
 
-return games
+            logger.info(f"⚠️ Absence détectée pour {base_url} ({self.absence_counter[base_url]}x)")
+
+            if self.absence_counter[base_url] >= self.ABSENCE_THRESHOLD:
+                logger.warning(f"🚨 Absence CONFIRMÉE après {self.ABSENCE_THRESHOLD} tentatives pour {base_url}")
+                # ← ici tu peux déclencher la logique de notification d'absence
+                # ex: send_absence_alert(base_url)
+
+                # Réinitialise après alerte
+                self.absence_counter[base_url] = 0
+        else:
+            # Réinitialise si on a de nouveau une détection
+            self.absence_counter[base_url] = 0
+
+        return games
 
         except Exception as e:
             logger.error(f"Erreur lors de la détection: {e}")
