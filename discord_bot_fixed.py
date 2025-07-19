@@ -1,434 +1,342 @@
+import discord
+from discord.ext import commands, tasks
+import aiohttp
+import asyncio
+import logging
+from datetime import datetime, timedelta
+import json
+import os
 
-class WebMonitorFixed:
+# Configuration du logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Configuration
+TOKEN = "VOTRE_TOKEN_BOT_DISCORD"
+CHANNEL_ID = 123456789  # ID du canal où envoyer les notifications
+CHECK_INTERVAL = 180  # 3 minutes en secondes
+ERROR_MESSAGE = "Veuillez réessayer quand l'invocateur sera dans une partie."
+MAX_RETRIES = 3  # Nombre de vérifications avant de considérer un changement comme valide
+
+class SiteMonitor:
     def __init__(self):
-        self.session = None
-        self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        self.monitored_sites = {}  # {url: {"status": "offline/online", "retries": 0, "last_check": datetime, "pseudo": str, "role": str}}
+        
+    def add_site(self, url, pseudo=None, role=None):
+        """Ajouter un site à surveiller"""
+        self.monitored_sites[url] = {
+            "status": "unknown",
+            "retries": 0,
+            "last_check": None,
+            "pseudo": pseudo,
+            "role": role
         }
-        # Cache pour éviter les re-détections
-        self.absence_counter = {}
-        self.ABSENCE_THRESHOLD = 3  # Nombre d’absences consécutives avant alerte
-
-        self.last_detection = {}
         
-    async def detect_live_game(self, html, base_url):
-        """Détection AMÉLIORÉE avec validation stricte"""
+    def remove_site(self, url):
+        """Supprimer un site de la surveillance"""
+        if url in self.monitored_sites:
+            del self.monitored_sites[url]
+            return True
+        return False
+    
+    async def check_site(self, url, session):
+        """Vérifier l'état d'un site"""
         try:
-            soup = BeautifulSoup(html, 'html.parser')
-            games = []
+            timeout = aiohttp.ClientTimeout(total=30)
+            async with session.get(url, timeout=timeout) as response:
+                if response.status == 200:
+                    content = await response.text()
+                    has_error_message = ERROR_MESSAGE in content
+                    return "offline" if has_error_message else "online"
+                else:
+                    logger.warning(f"Status HTTP {response.status} pour {url}")
+                    return "error"
+        except asyncio.TimeoutError:
+            logger.warning(f"Timeout pour {url}")
+            return "error"
+        except Exception as e:
+            logger.error(f"Erreur lors de la vérification de {url}: {e}")
+            return "error"
 
-            logger.info(f"🔍 Analyse stricte de la page pour parties LIVE...")
+class MonitorBot(commands.Bot):
+    def __init__(self):
+        intents = discord.Intents.default()
+        intents.message_content = True
+        super().__init__(command_prefix='!', intents=intents)
+        self.monitor = SiteMonitor()
+        
+    async def on_ready(self):
+        logger.info(f'{self.user} s\'est connecté à Discord!')
+        self.check_sites.start()
+        
+    async def on_command_error(self, ctx, error):
+        if isinstance(error, commands.CommandNotFound):
+            return
+        logger.error(f"Erreur de commande: {error}")
+        await ctx.send(f"Une erreur s'est produite: {error}")
 
-            # ÉTAPE 1: Vérifications préliminaires obligatoires
-            if not await self.is_valid_lol_page(soup, base_url):
-                logger.info("❌ Page non valide pour LoL")
-                return []
-
-            # ÉTAPE 2: Recherche d'indicateurs CONCRETS de partie active
-            live_indicators = await self.find_concrete_live_indicators(soup)
+    @commands.command(name='monitor')
+    async def add_monitor(self, ctx, url: str = None, pseudo: str = None, *, role: str = None):
+        """Ajouter un site à surveiller avec pseudo et rôle optionnels
+        
+        Usage: 
+        !monitor <url>
+        !monitor <url> <pseudo>
+        !monitor <url> <pseudo> <role>
+        
+        Exemples:
+        !monitor https://exemple.com
+        !monitor https://exemple.com PlayerName
+        !monitor https://exemple.com PlayerName Tank Principal
+        """
+        if not url:
+            embed = discord.Embed(
+                title="❓ Utilisation de la commande monitor",
+                description="**Syntaxe:**\n"
+                           "`!monitor <url>`\n"
+                           "`!monitor <url> <pseudo>`\n"
+                           "`!monitor <url> <pseudo> <role>`\n\n"
+                           "**Exemples:**\n"
+                           "• `!monitor https://exemple.com`\n"
+                           "• `!monitor https://exemple.com PlayerName`\n"
+                           "• `!monitor https://exemple.com PlayerName Tank Principal`",
+                color=0x3498db
+            )
+            await ctx.send(embed=embed)
+            return
             
-            if not live_indicators:
-                logger.info("❌ Aucun indicateur concret de partie live")
-                return []
-
-            # ÉTAPE 3: Validation STRICTE de chaque indicateur
-            for indicator in live_indicators:
-                validation_result = await self.strict_validate_live_game(indicator, soup, base_url)
-                
-                if validation_result['is_valid']:
-                    game_info = await self.extract_validated_game_info(validation_result, base_url)
-                    if game_info:
-                        # ÉTAPE 4: Vérification anti-doublon
-                        if not await self.is_duplicate_detection(game_info, base_url):
-                            games.append(game_info)
-                            logger.info(f"✅ Partie LIVE confirmée: {game_info['title']}")
-                        else:
-                            logger.info("⚠️ Détection dupliquée ignorée")
-
+        if not url.startswith(('http://', 'https://')):
+            url = 'https://' + url
             
+        if url in self.monitor.monitored_sites:
+            await ctx.send(f"⚠️ Ce site est déjà surveillé: {url}")
+            return
+            
+        self.monitor.add_site(url, pseudo, role)
+        
+        # Création de l'embed de confirmation
+        embed = discord.Embed(
+            title="✅ Surveillance ajoutée",
+            color=0x00ff00,
+            timestamp=datetime.now()
+        )
+        embed.add_field(name="🔗 URL", value=url, inline=False)
+        
+        if pseudo:
+            embed.add_field(name="👤 Pseudo", value=pseudo, inline=True)
+        if role:
+            embed.add_field(name="🎭 Rôle", value=role, inline=True)
+            
+        embed.set_footer(text="Le site sera vérifié toutes les 3 minutes")
+        
+        await ctx.send(embed=embed)
+        logger.info(f"Site ajouté à la surveillance: {url} (pseudo: {pseudo}, rôle: {role})")
 
-        # 🔄 GESTION DES ABSENCES : vérification glissante
-        if not games:
-            if base_url not in self.absence_counter:
-                self.absence_counter[base_url] = 1
+    @commands.command(name='unmonitor')
+    async def remove_monitor(self, ctx, url: str = None):
+        """Supprimer un site de la surveillance"""
+        if not url:
+            sites = list(self.monitor.monitored_sites.keys())
+            if sites:
+                sites_list = '\n'.join([f"• {site}" for site in sites])
+                await ctx.send(f"Sites surveillés:\n```\n{sites_list}\n```\nUtilisez `!unmonitor <url>` pour supprimer un site.")
             else:
-                self.absence_counter[base_url] += 1
-
-            logger.info(f"⚠️ Absence détectée pour {base_url} ({self.absence_counter[base_url]}x)")
-
-            if self.absence_counter[base_url] >= self.ABSENCE_THRESHOLD:
-                logger.warning(f"🚨 Absence CONFIRMÉE après {self.ABSENCE_THRESHOLD} tentatives pour {base_url}")
-                # ← ici tu peux déclencher la logique de notification d'absence
-                # ex: send_absence_alert(base_url)
-
-                # Réinitialise après alerte
-                self.absence_counter[base_url] = 0
+                await ctx.send("Aucun site n'est actuellement surveillé.")
+            return
+            
+        if not url.startswith(('http://', 'https://')):
+            url = 'https://' + url
+            
+        if self.monitor.remove_site(url):
+            await ctx.send(f"✅ Surveillance supprimée pour: {url}")
+            logger.info(f"Site supprimé de la surveillance: {url}")
         else:
-            # Réinitialise si on a de nouveau une détection
-            self.absence_counter[base_url] = 0
+            await ctx.send(f"❌ Ce site n'était pas surveillé: {url}")
 
-        return games
-
-        except Exception as e:
-            logger.error(f"Erreur lors de la détection: {e}")
-            return []
-
-    async def is_valid_lol_page(self, soup, base_url):
-        """Validation stricte que c'est une page LoL valide"""
-        try:
-            # 1. Vérifier le domaine
-            valid_domains = ['op.gg', 'u.gg', 'blitz.gg', 'porofessor.gg', 'lolking.net']
-            if not any(domain in base_url.lower() for domain in valid_domains):
-                logger.info(f"❌ Domaine non reconnu: {base_url}")
-                return False
+    @commands.command(name='status')
+    async def check_status(self, ctx):
+        """Afficher l'état de tous les sites surveillés"""
+        if not self.monitor.monitored_sites:
+            await ctx.send("Aucun site n'est actuellement surveillé.")
+            return
             
-            # 2. Vérifier la structure de la page
-            page_text = soup.get_text().lower()
-            required_elements = ['league of legends', 'summoner', 'rank']
-            
-            if not all(element in page_text for element in required_elements):
-                logger.info("❌ Structure de page LoL manquante")
-                return False
-            
-            # 3. Vérifier que c'est une page de joueur (pas une page générale)
-            if '/summoner/' not in base_url and '/player/' not in base_url:
-                logger.info("❌ Pas une page de joueur spécifique")
-                return False
-                
-            return True
-            
-        except Exception as e:
-            logger.error(f"Erreur validation page: {e}")
-            return False
-
-    async def find_concrete_live_indicators(self, soup):
-        """Recherche d'indicateurs CONCRETS de partie live"""
-        indicators = []
+        embed = discord.Embed(title="🔍 État de la surveillance", color=0x00ff00)
         
-        try:
-            # 1. Recherche de statuts de jeu explicites
-            live_status_selectors = [
-                '[data-game-status="live"]',
-                '[data-status="in-game"]', 
-                '.live-game-indicator',
-                '.spectate-button:not(.disabled)',
-                '[class*="live"][class*="game"]',
-                '[id*="live"][id*="game"]'
-            ]
-            
-            for selector in live_status_selectors:
-                elements = soup.select(selector)
-                for element in elements:
-                    if await self.validate_live_element(element):
-                        indicators.append({
-                            'element': element,
-                            'type': 'status_indicator',
-                            'confidence': 0.9
-                        })
-            
-            # 2. Recherche de boutons spectate ACTIFS
-            spectate_buttons = soup.find_all(['button', 'a'], 
-                                           class_=re.compile(r'spectate|watch', re.I))
-            
-            for button in spectate_buttons:
-                if await self.validate_spectate_button(button):
-                    indicators.append({
-                        'element': button,
-                        'type': 'spectate_button',
-                        'confidence': 0.7
-                    })
-            
-            # 3. Recherche de données de jeu en temps réel
-            game_time_elements = soup.find_all(string=re.compile(r'\d{1,2}:\d{2}', re.I))
-            for time_element in game_time_elements:
-                parent = time_element.parent
-                if await self.validate_game_timer(parent):
-                    indicators.append({
-                        'element': parent,
-                        'type': 'game_timer',
-                        'confidence': 0.8
-                    })
-            
-            
-            # Vérification spécifique : si le message "Veuillez réessayer..." N'EST PAS présent,
-            # cela peut indiquer qu'une partie est EN COURS malgré l'absence d'autres indicateurs
-            page_text = soup.get_text()
-            if "Veuillez réessayer quand l'invocateur sera dans une partie" not in page_text:
-                logger.info("✅ Message 'Veuillez réessayer...' absent → Partie potentiellement EN COURS")
-                indicators.append({
-                    'element': soup,
-                    'type': 'custom_message_absent',
-                    'confidence': 0.6
-                })
-
-            logger.info(f"🎯 {len(indicators)} indicateurs concrets trouvés")
-            return indicators
-            
-        except Exception as e:
-            logger.error(f"Erreur recherche indicateurs: {e}")
-            return []
-
-    async def validate_live_element(self, element):
-        """Validation qu'un élément indique vraiment une partie live"""
-        try:
-            # Vérifier que l'élément n'est pas désactivé
-            if element.get('disabled') or 'disabled' in element.get('class', []):
-                return False
-                
-            # Vérifier qu'il n'y a pas de texte indiquant que le jeu est fini
-            text = element.get_text().lower()
-            if any(word in text for word in ['ended', 'finished', 'completed', 'offline']):
-                return False
-                
-            return True
-            
-        except Exception:
-            return False
-
-    async def validate_spectate_button(self, button):
-        """Validation stricte d'un bouton spectate"""
-        try:
-            # 1. Vérifier que le bouton est actif
-            if button.get('disabled') or 'disabled' in button.get('class', []):
-                return False
-            
-            # 2. Vérifier le texte du bouton
-            button_text = button.get_text().strip().lower()
-            if not any(word in button_text for word in ['spectate', 'watch', 'live']):
-                return False
-                
-            # 3. Vérifier qu'il y a un lien valide
-            href = button.get('href')
-            if href and ('spectate' in href or 'live' in href):
-                return True
-                
-            # 4. Vérifier les attributs data-*
-            if button.get('data-spectate-url') or button.get('data-game-id'):
-                return True
-                
-            return False
-            
-        except Exception:
-            return False
-
-    async def validate_game_timer(self, element):
-        """Validation d'un timer de jeu"""
-        try:
-            text = element.get_text()
-            
-            # Vérifier le format du timer (MM:SS)
-            if not re.match(r'\d{1,2}:\d{2}', text):
-                return False
-                
-            # Vérifier le contexte (doit être dans un contexte de jeu)
-            parent_text = element.parent.get_text().lower()
-            if any(word in parent_text for word in ['game', 'match', 'duration']):
-                return True
-                
-            return False
-            
-        except Exception:
-            return False
-
-    async def strict_validate_live_game(self, indicator, soup, base_url):
-        """Validation STRICTE qu'une partie est réellement live"""
-        try:
-            element = indicator['element']
-            indicator_type = indicator['type']
-            
-            validation_result = {
-                'is_valid': False,
-                'player_name': None,
-                'game_data': {},
-                'confidence': 0
+        for url, data in self.monitor.monitored_sites.items():
+            status_emoji = {
+                "online": "🟢",
+                "offline": "🔴", 
+                "error": "⚠️",
+                "unknown": "⚪"
             }
             
-            # VALIDATION 1: Vérifier la cohérence temporelle
-            if not await self.validate_temporal_consistency(element, soup):
-                logger.info("❌ Échec validation temporelle")
-                return validation_result
+            status_text = {
+                "online": "En ligne (joueur disponible)",
+                "offline": "Hors ligne (en partie)",
+                "error": "Erreur de connexion", 
+                "unknown": "Non vérifié"
+            }
             
-            # VALIDATION 2: Extraire et valider les données de joueur
-            player_name = await self.extract_player_name_validated(base_url, soup)
-            if not player_name or player_name == "Joueur inconnu":
-                logger.info("❌ Nom de joueur non valide")
-                return validation_result
+            emoji = status_emoji.get(data["status"], "⚪")
+            text = status_text.get(data["status"], "Inconnu")
+            last_check = data["last_check"].strftime("%H:%M:%S") if data["last_check"] else "Jamais"
+            
+            # Construction du nom du field avec pseudo et rôle si disponibles
+            field_title = f"{emoji} "
+            if data.get("pseudo"):
+                field_title += f"**{data['pseudo']}**"
+                if data.get("role"):
+                    field_title += f" ({data['role']})"
+            else:
+                field_title += url
+            
+            # Construction de la valeur avec les infos
+            field_value = f"**Status:** {text}\n**Dernière vérification:** {last_check}"
+            if data.get("pseudo") or data.get("role"):
+                field_value += f"\n🔗 **URL:** {url}"
+            
+            embed.add_field(
+                name=field_title,
+                value=field_value,
+                inline=False
+            )
+            
+        embed.set_footer(text=f"Vérification automatique toutes les {CHECK_INTERVAL//60} minutes")
+        await ctx.send(embed=embed)
+
+    @tasks.loop(seconds=CHECK_INTERVAL)
+    async def check_sites(self):
+        """Vérifier périodiquement tous les sites surveillés"""
+        if not self.monitor.monitored_sites:
+            return
+            
+        channel = self.get_channel(CHANNEL_ID)
+        if not channel:
+            logger.error(f"Canal avec l'ID {CHANNEL_ID} introuvable")
+            return
+            
+        async with aiohttp.ClientSession() as session:
+            for url, data in self.monitor.monitored_sites.items():
+                try:
+                    current_status = await self.monitor.check_site(url, session)
+                    previous_status = data["status"]
+                    
+                    # Mise à jour de la dernière vérification
+                    data["last_check"] = datetime.now()
+                    
+                    # Gestion des erreurs de connexion
+                    if current_status == "error":
+                        logger.warning(f"Erreur de connexion pour {url}")
+                        continue
+                    
+                    # Première vérification
+                    if previous_status == "unknown":
+                        data["status"] = current_status
+                        data["retries"] = 0
+                        logger.info(f"État initial pour {url}: {current_status}")
+                        continue
+                    
+                    # Pas de changement
+                    if current_status == previous_status:
+                        data["retries"] = 0
+                        continue
+                    
+                    # Changement détecté - vérification anti-faux positif
+                    data["retries"] += 1
+                    logger.info(f"Changement potentiel pour {url}: {previous_status} -> {current_status} (tentative {data['retries']}/{MAX_RETRIES})")
+                    
+                    # Validation du changement après plusieurs vérifications
+                    if data["retries"] >= MAX_RETRIES:
+                        data["status"] = current_status
+                        data["retries"] = 0
+                        
+                        # Envoi de notification
+                        if current_status == "online" and previous_status == "offline":
+                            # Titre de l'embed avec pseudo et rôle si disponibles
+                            title = "🟢 Joueur en ligne !"
+                            if data.get("pseudo"):
+                                if data.get("role"):
+                                    description = f"**{data['pseudo']}** ({data['role']}) est maintenant disponible !"
+                                else:
+                                    description = f"**{data['pseudo']}** est maintenant disponible !"
+                            else:
+                                description = f"Le joueur est maintenant disponible !"
+                            
+                            description += f"\n🔗 **Lien:** {url}"
+                            
+                            embed = discord.Embed(
+                                title=title,
+                                description=description,
+                                color=0x00ff00,
+                                timestamp=datetime.now()
+                            )
+                            
+                            if data.get("pseudo"):
+                                embed.set_author(name=data["pseudo"], icon_url="https://cdn.discordapp.com/emojis/✅.png")
+                            if data.get("role"):
+                                embed.add_field(name="🎭 Rôle", value=data["role"], inline=True)
+                                
+                            embed.set_footer(text="Surveillance automatique • Joueur disponible")
+                            await channel.send(embed=embed)
+                            logger.info(f"Notification envoyée: joueur en ligne sur {url} (pseudo: {data.get('pseudo')}, rôle: {data.get('role')})")
+                            
+                        elif current_status == "offline" and previous_status == "online":
+                            title = "🔴 Joueur en partie"
+                            if data.get("pseudo"):
+                                if data.get("role"):
+                                    description = f"**{data['pseudo']}** ({data['role']}) est maintenant en partie."
+                                else:
+                                    description = f"**{data['pseudo']}** est maintenant en partie."
+                            else:
+                                description = f"Le joueur est maintenant en partie."
+                                
+                            description += f"\n🔗 **Lien:** {url}"
+                            
+                            embed = discord.Embed(
+                                title=title,
+                                description=description,
+                                color=0xff0000,
+                                timestamp=datetime.now()
+                            )
+                            
+                            if data.get("pseudo"):
+                                embed.set_author(name=data["pseudo"], icon_url="https://cdn.discordapp.com/emojis/❌.png")
+                            if data.get("role"):
+                                embed.add_field(name="🎭 Rôle", value=data["role"], inline=True)
+                                
+                            embed.set_footer(text="Surveillance automatique • Joueur indisponible")
+                            await channel.send(embed=embed)
+                            logger.info(f"Notification envoyée: joueur en partie sur {url} (pseudo: {data.get('pseudo')}, rôle: {data.get('role')})")
                 
-            # VALIDATION 3: Vérifier la cohérence des données de jeu
-            game_data = await self.extract_game_data_validated(element, soup)
-            if not game_data.get('is_coherent'):
-                logger.info("❌ Données de jeu incohérentes")
-                return validation_result
-            
-            validation_result.update({
-                'is_valid': True,
-                'player_name': player_name,
-                'game_data': game_data,
-                'confidence': indicator['confidence']
-            })
-            
-            return validation_result
-            
-        except Exception as e:
-            logger.error(f"Erreur validation stricte: {e}")
-            return {'is_valid': False}
+                except Exception as e:
+                    logger.error(f"Erreur lors de la vérification de {url}: {e}")
+                
+                # Délai entre les vérifications de sites
+                await asyncio.sleep(1)
 
-    async def validate_temporal_consistency(self, element, soup):
-        """Valide la cohérence temporelle des indicateurs"""
-        try:
-            # Rechercher des timestamps récents
-            current_time = datetime.now(UTC)
-            
-            # Chercher des indicateurs de temps dans la page
-            time_elements = soup.find_all(string=re.compile(r'ago|minutes?|seconds?|hours?'))
-            
-            for time_text in time_elements:
-                if 'minute' in time_text.lower() and 'ago' in time_text.lower():
-                    # Extraire le nombre de minutes
-                    minutes_match = re.search(r'(\d+)\s*minute', time_text.lower())
-                    if minutes_match:
-                        minutes_ago = int(minutes_match.group(1))
-                        # Si c'est trop vieux (>5 minutes), c'est suspect
-                        if minutes_ago > 5:
-                            return False
-            
-            return True
-            
-        except Exception:
-            return True  # En cas d'erreur, on assume que c'est valide
+    @check_sites.before_loop
+    async def before_check_sites(self):
+        await self.wait_until_ready()
 
-    async def extract_player_name_validated(self, base_url, soup):
-        """Extraction VALIDÉE du nom de joueur"""
-        try:
-            # Méthode 1: Extraire de l'URL
-            url_patterns = [
-                r'/summoner/([^/]+)',
-                r'/player/([^/]+)',
-                r'/profile/([^/]+)'
-            ]
-            
-            for pattern in url_patterns:
-                match = re.search(pattern, base_url, re.I)
-                if match:
-                    player_name = match.group(1)
-                    # Nettoyer le nom
-                    player_name = player_name.replace('%20', ' ').replace('+', ' ')
-                    if len(player_name) > 2:  # Validation minimale
-                        return player_name
-            
-            # Méthode 2: Extraire de la page
-            summoner_selectors = [
-                '.summoner-name',
-                '[data-summoner-name]',
-                '.player-name',
-                'h1',
-                '.profile-name'
-            ]
-            
-            for selector in summoner_selectors:
-                element = soup.select_one(selector)
-                if element:
-                    name = element.get_text().strip()
-                    if len(name) > 2 and len(name) < 50:  # Validation de longueur
-                        return name
-            
-            return None
-            
-        except Exception as e:
-            logger.error(f"Erreur extraction nom joueur: {e}")
-            return None
-
-    async def extract_game_data_validated(self, element, soup):
-        """Extraction VALIDÉE des données de jeu"""
-        try:
-            game_data = {
-                'is_coherent': False,
-                'champion': None,
-                'rank': None,
-                'game_mode': None,
-                'duration': None
-            }
-            
-            # Rechercher les données dans l'élément et ses environs
-            context_area = element.parent.parent if element.parent else element
-            context_text = context_area.get_text()
-            
-            # Extraire le champion
-            champion_match = re.search(r'champion[:\s]+([a-zA-Z\s]+)', context_text, re.I)
-            if champion_match:
-                game_data['champion'] = champion_match.group(1).strip()
-            
-            # Extraire le rang
-            rank_match = re.search(r'(bronze|silver|gold|platinum|diamond|master|grandmaster|challenger)', context_text, re.I)
-            if rank_match:
-                game_data['rank'] = rank_match.group(1).capitalize()
-            
-            # Validation de cohérence : au moins 2 éléments doivent être présents
-            valid_elements = sum(1 for v in game_data.values() if v is not None and v != False)
-            game_data['is_coherent'] = valid_elements >= 1  # Au moins un élément valide
-            
-            return game_data
-            
-        except Exception as e:
-            logger.error(f"Erreur extraction données jeu: {e}")
-            return {'is_coherent': False}
-
-    async def is_duplicate_detection(self, game_info, base_url):
-        """Vérification anti-doublon"""
-        try:
-            # Créer une clé unique pour cette détection
-            detection_key = f"{base_url}_{game_info.get('player', 'unknown')}"
-            current_time = datetime.now(UTC)
-            
-            # Vérifier si on a déjà détecté cette partie récemment (< 5 minutes)
-            if detection_key in self.last_detection:
-                last_time = self.last_detection[detection_key]
-                if (current_time - last_time).seconds < 300:  # 5 minutes
-                    return True
-            
-            # Enregistrer cette détection
-            self.last_detection[detection_key] = current_time
-            
-            # Nettoyer les anciennes détections (> 1 heure)
-            old_keys = [k for k, v in self.last_detection.items() 
-                       if (current_time - v).seconds > 3600]
-            for key in old_keys:
-                del self.last_detection[key]
-            
-            return False
-            
-        except Exception:
-            return False
-
-    async def extract_validated_game_info(self, validation_result, base_url):
-        """Extraction finale des informations de jeu validées"""
-        try:
-            if not validation_result['is_valid']:
-                return None
-            
-            game_data = validation_result['game_data']
-            player_name = validation_result['player_name']
-            
-            # Construction des informations finales
-            game_info = {
-                'title': f"🔴 LIVE: {player_name}",
-                'url': base_url,
-                'player': player_name,
-                'champion': game_data.get('champion', 'Inconnu'),
-                'rank': game_data.get('rank', 'Non classé'),
-                'confidence': validation_result['confidence'],
-                'timestamp': datetime.now(UTC).isoformat()
-            }
-            
-            # Enrichir le titre avec les informations disponibles
-            if game_data.get('champion'):
-                game_info['title'] += f" ({game_data['champion']})"
-            
-            if game_data.get('rank'):
-                game_info['title'] += f" [{game_data['rank']}]"
-            
-            return game_info
-            
-        except Exception as e:
-            logger.error(f"Erreur extraction finale: {e}")
-            return None
+# Configuration et démarrage du bot
+if __name__ == "__main__":
+    bot = MonitorBot()
+    
+    # Vérification de la configuration
+    if TOKEN == "VOTRE_TOKEN_BOT_DISCORD":
+        print("❌ Veuillez configurer votre token Discord dans TOKEN")
+        exit(1)
+        
+    if CHANNEL_ID == 123456789:
+        print("❌ Veuillez configurer l'ID du canal Discord dans CHANNEL_ID")
+        exit(1)
+    
+    print(f"🚀 Démarrage du bot...")
+    print(f"📊 Intervalle de vérification: {CHECK_INTERVAL} secondes")
+    print(f"🔍 Message d'erreur surveillé: '{ERROR_MESSAGE}'")
+    print(f"🛡️ Vérifications anti-faux positif: {MAX_RETRIES}")
+    
+    try:
+        bot.run(TOKEN)
+    except Exception as e:
+        logger.error(f"Erreur lors du démarrage du bot: {e}")
