@@ -6,6 +6,9 @@ class WebMonitorFixed:
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         }
         # Cache pour éviter les re-détections
+        self.absence_counter = {}
+        self.ABSENCE_THRESHOLD = 3  # Nombre d’absences consécutives avant alerte
+
         self.last_detection = {}
         
     async def detect_live_game(self, html, base_url):
@@ -42,7 +45,28 @@ class WebMonitorFixed:
                         else:
                             logger.info("⚠️ Détection dupliquée ignorée")
 
-            return games
+            
+            # 🔄 GESTION DES ABSENCES : vérification glissante
+            if not games:
+                if base_url not in self.absence_counter:
+                    self.absence_counter[base_url] = 1
+                else:
+                    self.absence_counter[base_url] += 1
+
+                logger.info(f"⚠️ Absence détectée pour {base_url} ({self.absence_counter[base_url]}x)")
+
+                if self.absence_counter[base_url] >= self.ABSENCE_THRESHOLD:
+                    logger.warning(f"🚨 Absence CONFIRMÉE après {self.ABSENCE_THRESHOLD} tentatives pour {base_url}")
+                    # ← ici tu peux déclencher la logique de notification d'absence
+                    # ex: send_absence_alert(base_url)
+
+                    # Réinitialise après alerte
+                    self.absence_counter[base_url] = 0
+            else:
+                # Réinitialise si on a de nouveau une détection
+                self.absence_counter[base_url] = 0
+
+return games
 
         except Exception as e:
             logger.error(f"Erreur lors de la détection: {e}")
@@ -124,6 +148,18 @@ class WebMonitorFixed:
                         'confidence': 0.8
                     })
             
+            
+            # Vérification spécifique : si le message "Veuillez réessayer..." N'EST PAS présent,
+            # cela peut indiquer qu'une partie est EN COURS malgré l'absence d'autres indicateurs
+            page_text = soup.get_text()
+            if "Veuillez réessayer quand l'invocateur sera dans une partie" not in page_text:
+                logger.info("✅ Message 'Veuillez réessayer...' absent → Partie potentiellement EN COURS")
+                indicators.append({
+                    'element': soup,
+                    'type': 'custom_message_absent',
+                    'confidence': 0.6
+                })
+
             logger.info(f"🎯 {len(indicators)} indicateurs concrets trouvés")
             return indicators
             
