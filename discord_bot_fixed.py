@@ -1,263 +1,546 @@
-const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
-const axios = require('axios');
+import discord
+from discord.ext import commands, tasks
+import aiohttp
+import json
+import asyncio
+import os
+from datetime import datetime, UTC
+import logging
+from threading import Thread
+from flask import Flask
 
-class PlayerMonitor {
-    constructor(token, channelId) {
-        this.client = new Client({
-            intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent]
-        });
-        
-        this.token = token;
-        this.channelId = channelId;
-        this.monitoredUrls = new Map(); // URL -> { isOffline: boolean, consecutiveErrors: number, lastCheck: Date }
-        this.offlineMessage = "Veuillez réessayer quand l'invocateur sera dans une partie.";
-        this.checkInterval = 3 * 60 * 1000; // 3 minutes
-        this.maxConsecutiveErrors = 3; // Éviter les faux positifs dus aux erreurs de site
-        
-        this.setupBot();
-    }
+# === Flask (pour Render) ===
+app = Flask('')
 
-    setupBot() {
-        this.client.on('ready', () => {
-            console.log(`Bot connecté en tant que ${this.client.user.tag}`);
-            this.startMonitoring();
-        });
+@app.route('/')
+def home():
+    return "Bot Discord actif."
 
-        this.client.on('messageCreate', async (message) => {
-            if (message.author.bot) return;
-            await this.handleCommands(message);
-        });
+def run_flask():
+    app.run(host='0.0.0.0', port=8080)
 
-        this.client.login(this.token);
-    }
+# === Logger ===
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-    async handleCommands(message) {
-        const content = message.content.toLowerCase().trim();
-        
-        if (content.startsWith('!monitor ')) {
-            const url = content.slice(9).trim();
-            if (this.isValidUrl(url)) {
-                await this.addMonitoring(url, message);
-            } else {
-                message.reply('❌ URL invalide. Veuillez fournir une URL valide.');
-            }
+# === Bot Discord ===
+intents = discord.Intents.default()
+intents.message_content = True
+intents.guilds = True
+intents.reactions = True
+
+bot = commands.Bot(command_prefix='!', intents=intents)
+
+# === Twitch credentials (devraient être des variables d'environnement en prod) ===
+TWITCH_CLIENT_ID = "tejcc6qy12vbclkl2qige9szpfoher"
+TWITCH_CLIENT_SECRET = "18jywkay5xbbo5d2028f4fxwyf0txk"
+
+streamers = {}
+stream_messages = {}
+ping_roles = {}
+notification_channels = {}
+reaction_role_messages = {}  # Nouveau: stockage des messages pour les rôles par réaction
+
+class TwitchAPI:
+    def __init__(self):
+        self.token = None
+        self.headers = {}
+        self.token_expires_at = None
+
+    async def get_token(self):
+        url = "https://id.twitch.tv/oauth2/token"
+        params = {
+            'client_id': TWITCH_CLIENT_ID,
+            'client_secret': TWITCH_CLIENT_SECRET,
+            'grant_type': 'client_credentials'
         }
-        
-        else if (content === '!list') {
-            await this.listMonitored(message);
-        }
-        
-        else if (content.startsWith('!remove ')) {
-            const url = content.slice(8).trim();
-            await this.removeMonitoring(url, message);
-        }
-        
-        else if (content === '!help') {
-            await this.showHelp(message);
-        }
-    }
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, params=params) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        self.token = data['access_token']
+                        self.headers = {
+                            'Client-ID': TWITCH_CLIENT_ID,
+                            'Authorization': f'Bearer {self.token}'
+                        }
+                        self.token_expires_at = datetime.now(UTC).timestamp() + data.get('expires_in', 3600)
+                        logger.info("Token Twitch obtenu avec succès")
+                        return True
+                    else:
+                        logger.error(f"Erreur lors de l'obtention du token Twitch: {response.status}")
+                        return False
+        except Exception as e:
+            logger.error(f"Exception lors de l'obtention du token Twitch: {e}")
+            return False
 
-    isValidUrl(string) {
-        try {
-            new URL(string);
-            return true;
-        } catch (_) {
-            return false;
-        }
-    }
+    async def ensure_valid_token(self):
+        if not self.token or (self.token_expires_at and datetime.now(UTC).timestamp() >= self.token_expires_at - 300):
+            await self.get_token()
 
-    async addMonitoring(url, message) {
-        if (this.monitoredUrls.has(url)) {
-            message.reply('🔍 Cette URL est déjà surveillée.');
-            return;
-        }
+    async def get_streams(self, usernames):
+        if not usernames:
+            return []
 
-        // Test initial de l'URL
-        try {
-            const response = await this.checkUrl(url);
-            const isOffline = response.includes(this.offlineMessage);
+        await self.ensure_valid_token()
+        url = "https://api.twitch.tv/helix/streams"
+        params = {'user_login': usernames}
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, headers=self.headers, params=params) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        return data['data']
+                    elif response.status == 401:
+                        logger.warning("Token Twitch invalide, renouvellement...")
+                        await self.get_token()
+                        return await self.get_streams(usernames)
+                    else:
+                        logger.error(f"Erreur API Twitch streams: {response.status}")
+                        return []
+        except Exception as e:
+            logger.error(f"Exception lors de la récupération des streams: {e}")
+            return []
+
+    async def get_user_info(self, username):
+        await self.ensure_valid_token()
+        url = "https://api.twitch.tv/helix/users"
+        params = {'login': username}
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, headers=self.headers, params=params) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        return data['data'][0] if data['data'] else None
+                    elif response.status == 401:
+                        logger.warning("Token Twitch invalide, renouvellement...")
+                        await self.get_token()
+                        return await self.get_user_info(username)
+                    else:
+                        logger.error(f"Erreur API Twitch user: {response.status}")
+                        return None
+        except Exception as e:
+            logger.error(f"Exception lors de la récupération de l'utilisateur: {e}")
+            return None
+
+twitch_api = TwitchAPI()
+
+@bot.event
+async def on_ready():
+    print(f'{bot.user} est connecté et prêt !')
+    await twitch_api.get_token()
+    if not check_streams.is_running():
+        check_streams.start()
+
+@tasks.loop(minutes=1)
+async def check_streams():
+    try:
+        for channel_id, streamer_list in streamers.items():
+            if not streamer_list:
+                continue
+
+            channel = bot.get_channel(channel_id)
+            if not channel:
+                logger.warning(f"Channel {channel_id} non trouvé")
+                continue
+
+            streams = await twitch_api.get_streams(streamer_list)
+            currently_live = {stream['user_login'].lower() for stream in streams}
+
+            for stream in streams:
+                username = stream['user_login'].lower()
+                message_key = f"{channel_id}_{username}"
+
+                if message_key not in stream_messages:
+                    await send_stream_notification(channel, stream)
+
+            to_remove = []
+            for message_key, message_id in stream_messages.items():
+                if message_key.startswith(f"{channel_id}_"):
+                    username = message_key.split('_', 1)[1]
+                    if username not in currently_live:
+                        try:
+                            message = await channel.fetch_message(message_id)
+                            await message.delete()
+                            to_remove.append(message_key)
+                        except discord.NotFound:
+                            to_remove.append(message_key)
+                        except discord.Forbidden:
+                            logger.warning(f"Pas de permission pour supprimer le message de {username}")
+                            to_remove.append(message_key)
+                        except Exception as e:
+                            logger.error(f"Erreur lors de la suppression du message: {e}")
+                            to_remove.append(message_key)
+
+            for message_key in to_remove:
+                stream_messages.pop(message_key, None)
+
+    except Exception as e:
+        logger.error(f"Erreur dans check_streams: {e}")
+
+@check_streams.before_loop
+async def before_check_streams():
+    await bot.wait_until_ready()
+
+async def send_stream_notification(channel, stream):
+    try:
+        username = stream['user_login']
+        game_name = stream['game_name'] or "Pas de catégorie"
+        viewer_count = stream['viewer_count']
+        title = stream['title'] or "Pas de titre"
+
+        embed = discord.Embed(
+            title=f"🔴 {stream['user_name']} est en live !",
+            description=f"**{title}**",
+            color=0x9146ff,
+            url=f"https://twitch.tv/{username}"
+        )
+        embed.add_field(name="🎮 Catégorie", value=game_name, inline=True)
+        embed.add_field(name="👥 Viewers", value=f"{viewer_count:,}", inline=True)
+        embed.add_field(name="🔗 Lien", value=f"[Regarder le stream](https://twitch.tv/{username})", inline=False)
+
+        if stream.get('thumbnail_url'):
+            thumbnail = stream['thumbnail_url'].replace('{width}', '320').replace('{height}', '180')
+            embed.set_image(url=thumbnail)
+
+        embed.timestamp = datetime.now(UTC)
+
+        content = ""
+        if channel.id in ping_roles:
+            role = channel.guild.get_role(ping_roles[channel.id])
+            if role:
+                content = f"{role.mention} "
+
+        message = await channel.send(content=content, embed=embed)
+        message_key = f"{channel.id}_{username.lower()}"
+        stream_messages[message_key] = message.id
+
+        logger.info(f"Notification envoyée pour {username} dans {channel.name}")
+
+    except discord.Forbidden:
+        logger.error(f"Pas de permission pour envoyer un message dans {channel.name}")
+    except Exception as e:
+        logger.error(f"Erreur lors de l'envoi de la notification: {e}")
+
+async def delete_command_messages(ctx, response_message=None):
+    """Supprime le message de commande et la réponse du bot après un délai"""
+    try:
+        await asyncio.sleep(5)  # Attendre 5 secondes
+        if ctx.message:
+            await ctx.message.delete()
+        if response_message:
+            await response_message.delete()
+    except discord.NotFound:
+        pass  # Le message a déjà été supprimé
+    except discord.Forbidden:
+        pass  # Pas de permission pour supprimer
+
+@bot.command(name='addstreamer')
+@commands.has_permissions(manage_channels=True)
+async def add_streamer(ctx, username=None):
+    if username is None:
+        response = await ctx.send("❌ Veuillez spécifier un nom d'utilisateur Twitch !")
+        asyncio.create_task(delete_command_messages(ctx, response))
+        return
+
+    channel_id = ctx.channel.id
+    username = username.lower().replace('@', '').strip()
+
+    if not username:
+        response = await ctx.send("❌ Nom d'utilisateur invalide !")
+        asyncio.create_task(delete_command_messages(ctx, response))
+        return
+
+    if channel_id not in streamers:
+        streamers[channel_id] = []
+
+    if username in streamers[channel_id]:
+        response = await ctx.send(f"❌ {username} est déjà dans la liste !")
+        asyncio.create_task(delete_command_messages(ctx, response))
+        return
+
+    user_info = await twitch_api.get_user_info(username)
+    if not user_info:
+        response = await ctx.send(f"❌ Le streamer {username} n'existe pas sur Twitch !")
+        asyncio.create_task(delete_command_messages(ctx, response))
+        return
+
+    streamers[channel_id].append(username)
+    response = await ctx.send(f"✅ {username} ajouté à la liste des streamers surveillés !")
+    asyncio.create_task(delete_command_messages(ctx, response))
+
+@bot.command(name='addstreamers')
+@commands.has_permissions(manage_channels=True)
+async def add_streamers(ctx, *usernames):
+    if not usernames:
+        response = await ctx.send("❌ Veuillez spécifier au moins un nom d'utilisateur Twitch !\nExemple: `!addstreamers streamer1 streamer2 streamer3`")
+        asyncio.create_task(delete_command_messages(ctx, response))
+        return
+
+    channel_id = ctx.channel.id
+    if channel_id not in streamers:
+        streamers[channel_id] = []
+
+    added_streamers = []
+    already_exists = []
+    invalid_streamers = []
+
+    for username in usernames:
+        username = username.lower().replace('@', '').strip()
+        
+        if not username:
+            continue
             
-            this.monitoredUrls.set(url, {
-                isOffline: isOffline,
-                consecutiveErrors: 0,
-                lastCheck: new Date(),
-                addedBy: message.author.id
-            });
+        if username in streamers[channel_id]:
+            already_exists.append(username)
+            continue
 
-            const embed = new EmbedBuilder()
-                .setColor(isOffline ? 0xff0000 : 0x00ff00)
-                .setTitle('🔍 Surveillance ajoutée')
-                .setDescription(`URL: ${url}`)
-                .addFields(
-                    { name: 'Statut actuel', value: isOffline ? '🔴 Hors ligne' : '🟢 En ligne' },
-                    { name: 'Vérification', value: 'Toutes les 3 minutes' }
-                )
-                .setTimestamp();
+        user_info = await twitch_api.get_user_info(username)
+        if not user_info:
+            invalid_streamers.append(username)
+            continue
 
-            message.reply({ embeds: [embed] });
-            console.log(`Surveillance ajoutée pour: ${url} (Statut: ${isOffline ? 'Hors ligne' : 'En ligne'})`);
-            
-        } catch (error) {
-            message.reply('❌ Impossible de vérifier l\'URL. Vérifiez qu\'elle est accessible.');
-            console.error('Erreur lors du test initial:', error.message);
-        }
+        streamers[channel_id].append(username)
+        added_streamers.append(username)
+
+    # Construire le message de réponse
+    message_parts = []
+    
+    if added_streamers:
+        message_parts.append(f"✅ **Streamers ajoutés:** {', '.join(added_streamers)}")
+    
+    if already_exists:
+        message_parts.append(f"⚠️ **Déjà dans la liste:** {', '.join(already_exists)}")
+    
+    if invalid_streamers:
+        message_parts.append(f"❌ **Streamers introuvables:** {', '.join(invalid_streamers)}")
+
+    if not message_parts:
+        message_parts.append("❌ Aucun streamer valide fourni !")
+
+    response = await ctx.send("\n".join(message_parts))
+    asyncio.create_task(delete_command_messages(ctx, response))
+
+@bot.command(name='removestreamer')
+@commands.has_permissions(manage_channels=True)
+async def remove_streamer(ctx, username=None):
+    if username is None:
+        response = await ctx.send("❌ Veuillez spécifier un nom d'utilisateur Twitch !")
+        asyncio.create_task(delete_command_messages(ctx, response))
+        return
+
+    channel_id = ctx.channel.id
+    username = username.lower().replace('@', '').strip()
+
+    if channel_id not in streamers or username not in streamers[channel_id]:
+        response = await ctx.send(f"❌ {username} n'est pas dans la liste !")
+        asyncio.create_task(delete_command_messages(ctx, response))
+        return
+
+    streamers[channel_id].remove(username)
+
+    message_key = f"{channel_id}_{username}"
+    if message_key in stream_messages:
+        try:
+            message = await ctx.channel.fetch_message(stream_messages[message_key])
+            await message.delete()
+        except:
+            pass
+        finally:
+            stream_messages.pop(message_key, None)
+
+    response = await ctx.send(f"✅ {username} retiré de la liste des streamers surveillés !")
+    asyncio.create_task(delete_command_messages(ctx, response))
+
+@bot.command(name='liststreamer')
+async def list_streamers(ctx):
+    channel_id = ctx.channel.id
+
+    if channel_id not in streamers or not streamers[channel_id]:
+        await ctx.send("📋 Aucun streamer surveillé dans ce channel !")
+        return
+
+    embed = discord.Embed(
+        title="📋 Streamers surveillés",
+        description="\n".join(f"• {streamer}" for streamer in streamers[channel_id]),
+        color=0x9146ff
+    )
+    await ctx.send(embed=embed)
+
+@bot.command(name='pingrole')
+@commands.has_permissions(manage_roles=True)
+async def set_ping_role(ctx, role: discord.Role = None):
+    channel_id = ctx.channel.id
+
+    if role is None:
+        if channel_id in ping_roles:
+            del ping_roles[channel_id]
+        await ctx.send("✅ Rôle de ping désactivé pour ce channel !")
+        return
+
+    ping_roles[channel_id] = role.id
+    await ctx.send(f"✅ Le rôle {role.mention} sera ping lors des notifications de stream !")
+
+@bot.command(name='reactionrole')
+@commands.has_permissions(manage_roles=True)
+async def create_reaction_role(ctx, role: discord.Role = None, emoji: str = "🔔"):
+    """Crée un message sur lequel les utilisateurs peuvent réagir pour obtenir un rôle"""
+    if role is None:
+        await ctx.send("❌ Veuillez spécifier un rôle !\nExemple: `!reactionrole @Notifications 🔔`")
+        return
+
+    # Créer l'embed pour le message de réaction
+    embed = discord.Embed(
+        title="🎯 Rôle par Réaction",
+        description=f"Réagissez avec {emoji} pour obtenir le rôle **{role.name}**\n\nRéagissez à nouveau pour retirer le rôle.",
+        color=0x9146ff
+    )
+    embed.add_field(name="Rôle", value=role.mention, inline=True)
+    embed.add_field(name="Emoji", value=emoji, inline=True)
+    embed.set_footer(text="Système de rôles automatique")
+
+    # Supprimer le message de commande
+    try:
+        await ctx.message.delete()
+    except:
+        pass
+
+    # Envoyer le message et ajouter la réaction
+    message = await ctx.send(embed=embed)
+    await message.add_reaction(emoji)
+
+    # Stocker les informations pour le système de réaction
+    reaction_role_messages[message.id] = {
+        'role_id': role.id,
+        'emoji': emoji,
+        'guild_id': ctx.guild.id
     }
 
-    async removeMonitoring(url, message) {
-        if (this.monitoredUrls.has(url)) {
-            this.monitoredUrls.delete(url);
-            message.reply(`✅ Surveillance supprimée pour: ${url}`);
-            console.log(`Surveillance supprimée pour: ${url}`);
-        } else {
-            message.reply('❌ Cette URL n\'est pas surveillée.');
-        }
-    }
+    logger.info(f"Message de réaction créé pour le rôle {role.name} avec l'emoji {emoji}")
 
-    async listMonitored(message) {
-        if (this.monitoredUrls.size === 0) {
-            message.reply('📝 Aucune URL surveillée actuellement.');
-            return;
-        }
+@bot.event
+async def on_reaction_add(reaction, user):
+    """Gère l'ajout de réactions pour donner des rôles"""
+    if user.bot:
+        return
 
-        const embed = new EmbedBuilder()
-            .setColor(0x0099ff)
-            .setTitle('📋 URLs Surveillées')
-            .setTimestamp();
+    message_id = reaction.message.id
+    if message_id not in reaction_role_messages:
+        return
 
-        let description = '';
-        for (const [url, data] of this.monitoredUrls) {
-            const status = data.isOffline ? '🔴 Hors ligne' : '🟢 En ligne';
-            const lastCheck = data.lastCheck.toLocaleString('fr-FR');
-            description += `**${url}**\n${status} - Dernière vérif: ${lastCheck}\n\n`;
-        }
+    role_data = reaction_role_messages[message_id]
+    
+    # Vérifier si c'est le bon emoji
+    if str(reaction.emoji) != role_data['emoji']:
+        return
 
-        embed.setDescription(description);
-        message.reply({ embeds: [embed] });
-    }
+    # Récupérer le rôle et l'utilisateur
+    guild = bot.get_guild(role_data['guild_id'])
+    if not guild:
+        return
 
-    async showHelp(message) {
-        const embed = new EmbedBuilder()
-            .setColor(0x0099ff)
-            .setTitle('🤖 Aide - Bot Surveillant de Joueur')
-            .setDescription('Commandes disponibles:')
-            .addFields(
-                { name: '!monitor <URL>', value: 'Ajouter une URL à surveiller' },
-                { name: '!list', value: 'Afficher toutes les URLs surveillées' },
-                { name: '!remove <URL>', value: 'Supprimer une URL de la surveillance' },
-                { name: '!help', value: 'Afficher cette aide' }
-            )
-            .addFields(
-                { name: 'ℹ️ Fonctionnement', value: 'Le bot vérifie toutes les 3 minutes si le message "Veuillez réessayer quand l\'invocateur sera dans une partie." est présent sur les pages surveillées.' },
-                { name: '🛡️ Protection', value: 'Système anti-faux positifs avec vérifications multiples avant notification.' }
-            )
-            .setTimestamp();
+    role = guild.get_role(role_data['role_id'])
+    member = guild.get_member(user.id)
 
-        message.reply({ embeds: [embed] });
-    }
+    if not role or not member:
+        return
 
-    async checkUrl(url) {
-        const response = await axios.get(url, {
-            timeout: 10000,
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            }
-        });
-        return response.data;
-    }
+    # Ajouter le rôle
+    try:
+        await member.add_roles(role)
+        logger.info(f"Rôle {role.name} ajouté à {member.name}")
+    except discord.Forbidden:
+        logger.error(f"Pas de permission pour ajouter le rôle {role.name} à {member.name}")
+    except Exception as e:
+        logger.error(f"Erreur lors de l'ajout du rôle: {e}")
 
-    startMonitoring() {
-        setInterval(async () => {
-            for (const [url, data] of this.monitoredUrls) {
-                try {
-                    const content = await this.checkUrl(url);
-                    const isCurrentlyOffline = content.includes(this.offlineMessage);
-                    
-                    // Reset du compteur d'erreurs si la vérification réussit
-                    data.consecutiveErrors = 0;
-                    data.lastCheck = new Date();
+@bot.event
+async def on_reaction_remove(reaction, user):
+    """Gère la suppression de réactions pour retirer des rôles"""
+    if user.bot:
+        return
 
-                    // Vérifier s'il y a un changement de statut
-                    if (data.isOffline && !isCurrentlyOffline) {
-                        // Le joueur est maintenant EN LIGNE
-                        await this.sendNotification(url, true);
-                        data.isOffline = false;
-                        console.log(`🟢 ${url} - Joueur EN LIGNE`);
-                    } else if (!data.isOffline && isCurrentlyOffline) {
-                        // Le joueur est maintenant HORS LIGNE
-                        await this.sendNotification(url, false);
-                        data.isOffline = true;
-                        console.log(`🔴 ${url} - Joueur HORS LIGNE`);
-                    }
+    message_id = reaction.message.id
+    if message_id not in reaction_role_messages:
+        return
 
-                } catch (error) {
-                    data.consecutiveErrors++;
-                    console.error(`Erreur lors de la vérification de ${url}:`, error.message);
-                    
-                    // Si trop d'erreurs consécutives, considérer comme potentiellement hors ligne
-                    // mais seulement après plusieurs tentatives pour éviter les faux positifs
-                    if (data.consecutiveErrors >= this.maxConsecutiveErrors && !data.isOffline) {
-                        console.warn(`⚠️ Trop d'erreurs consécutives pour ${url}, possible changement de statut`);
-                        // Optionnel: envoyer une notification d'erreur
-                        await this.sendErrorNotification(url, error.message);
-                    }
-                }
-            }
-        }, this.checkInterval);
+    role_data = reaction_role_messages[message_id]
+    
+    # Vérifier si c'est le bon emoji
+    if str(reaction.emoji) != role_data['emoji']:
+        return
 
-        console.log('🔍 Surveillance démarrée - Vérification toutes les 3 minutes');
-    }
+    # Récupérer le rôle et l'utilisateur
+    guild = bot.get_guild(role_data['guild_id'])
+    if not guild:
+        return
 
-    async sendNotification(url, isOnline) {
-        const channel = this.client.channels.cache.get(this.channelId);
-        if (!channel) {
-            console.error('Canal Discord introuvable');
-            return;
-        }
+    role = guild.get_role(role_data['role_id'])
+    member = guild.get_member(user.id)
 
-        const embed = new EmbedBuilder()
-            .setColor(isOnline ? 0x00ff00 : 0xff0000)
-            .setTitle(isOnline ? '🟢 Joueur EN LIGNE!' : '🔴 Joueur HORS LIGNE')
-            .setDescription(`**URL:** ${url}`)
-            .addFields({
-                name: 'Statut',
-                value: isOnline ? 
-                    '✅ Le joueur est maintenant disponible pour jouer!' :
-                    '❌ Le joueur n\'est plus en ligne'
-            })
-            .setTimestamp()
-            .setFooter({ text: 'Surveillance automatique' });
+    if not role or not member:
+        return
 
-        await channel.send({ embeds: [embed] });
-    }
+    # Retirer le rôle
+    try:
+        await member.remove_roles(role)
+        logger.info(f"Rôle {role.name} retiré de {member.name}")
+    except discord.Forbidden:
+        logger.error(f"Pas de permission pour retirer le rôle {role.name} de {member.name}")
+    except Exception as e:
+        logger.error(f"Erreur lors du retrait du rôle: {e}")
 
-    async sendErrorNotification(url, errorMessage) {
-        const channel = this.client.channels.cache.get(this.channelId);
-        if (!channel) return;
+@bot.command(name='streamhelp')
+async def stream_help(ctx):
+    embed = discord.Embed(
+        title="🤖 Aide du Bot Twitch",
+        description="Commandes disponibles :",
+        color=0x9146ff
+    )
+    embed.add_field(name="!addstreamer <username>", value="Ajouter un streamer à surveiller", inline=False)
+    embed.add_field(name="!addstreamers <user1> <user2> ...", value="Ajouter plusieurs streamers d'un coup", inline=False)
+    embed.add_field(name="!removestreamer <username>", value="Retirer un streamer de la surveillance", inline=False)
+    embed.add_field(name="!liststreamer", value="Afficher la liste des streamers surveillés", inline=False)
+    embed.add_field(name="!pingrole [@role]", value="Définir le rôle à ping (sans rôle = désactiver)", inline=False)
+    embed.add_field(name="!reactionrole [@role] [emoji]", value="Créer un message pour obtenir un rôle par réaction", inline=False)
+    embed.set_footer(text="Les commandes addstreamer et removestreamer s'auto-suppriment après 5 secondes")
+    await ctx.send(embed=embed)
 
-        const embed = new EmbedBuilder()
-            .setColor(0xffaa00)
-            .setTitle('⚠️ Erreur de surveillance')
-            .setDescription(`Problème lors de la vérification de: ${url}`)
-            .addFields({
-                name: 'Erreur',
-                value: errorMessage.substring(0, 1000) // Limiter la taille
-            })
-            .setTimestamp();
+@bot.event
+async def on_command_error(ctx, error):
+    if isinstance(error, commands.MissingPermissions):
+        response = await ctx.send("❌ Vous n'avez pas les permissions nécessaires pour cette commande !")
+        if ctx.command.name in ['addstreamer', 'removestreamer', 'addstreamers']:
+            asyncio.create_task(delete_command_messages(ctx, response))
+    elif isinstance(error, commands.BadArgument):
+        response = await ctx.send("❌ Argument invalide ! Utilisez `!streamhelp` pour voir les commandes.")
+        if ctx.command.name in ['addstreamer', 'removestreamer', 'addstreamers']:
+            asyncio.create_task(delete_command_messages(ctx, response))
+    elif isinstance(error, commands.MissingRequiredArgument):
+        response = await ctx.send("❌ Argument manquant ! Utilisez `!streamhelp` pour voir les commandes.")
+        if ctx.command.name in ['addstreamer', 'removestreamer', 'addstreamers']:
+            asyncio.create_task(delete_command_messages(ctx, response))
+    else:
+        logger.error(f"Erreur non gérée: {error}")
 
-        await channel.send({ embeds: [embed] });
-    }
-}
+@bot.event
+async def on_disconnect():
+    if check_streams.is_running():
+        check_streams.cancel()
 
-// Configuration - REMPLACEZ PAR VOS VRAIES VALEURS
-const DISCORD_TOKEN = 'VOTRE_TOKEN_BOT_DISCORD';
-const CHANNEL_ID = 'VOTRE_ID_CANAL_DISCORD';
-
-// Démarrage du bot
-const monitor = new PlayerMonitor(DISCORD_TOKEN, CHANNEL_ID);
-
-// Gestion propre de l'arrêt
-process.on('SIGINT', () => {
-    console.log('Arrêt du bot...');
-    monitor.client.destroy();
-    process.exit(0);
-});
+# === Lancement ===
+if __name__ == "__main__":
+    Thread(target=run_flask).start()  # ← rend Render content (port 8080 simulé)
+    token = os.getenv("DISCORD_BOT_TOKEN")
+    if not token:
+        print("❌ Le token Discord est manquant !")
+    else:
+        try:
+            print(f"🚀 Connexion avec le token: {token[:10]}...")
+            bot.run(token)
+        except discord.errors.LoginFailure:
+            print("❌ Token Discord invalide !")
+        except Exception as e:
+            logger.error(f"Erreur lors du lancement du bot: {e}")
