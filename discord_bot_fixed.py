@@ -79,32 +79,32 @@ class TwitchAPI:
         if not self.token or (self.token_expires_at and datetime.now(UTC).timestamp() >= self.token_expires_at - 300):
             await self.get_token()
 
-    async def get_streams(self, usernames):
-        if not usernames:
-            return []
+    
+async def get_streams(self, usernames):
+    if not usernames:
+        return []
 
-        await self.ensure_valid_token()
-        url = "https://api.twitch.tv/helix/streams"
-        params = {'user_login': usernames}
+    await self.ensure_valid_token()
+    url = "https://api.twitch.tv/helix/streams"
+    params = {'user_login': usernames}
 
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, headers=self.headers, params=params) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        return data['data']
-                    elif response.status == 401:
-                        logger.warning("Token Twitch invalide, renouvellement...")
-                        await self.get_token()
-                        return await self.get_streams(usernames)
-                    else:
-                        logger.error(f"Erreur API Twitch streams: {response.status}")
-                        return []
-        except Exception as e:
-            logger.error(f"Exception lors de la récupération des streams: {e}")
-            return []
-
-    async def get_user_info(self, username):
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=self.headers, params=params) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    return data['data']
+                elif response.status == 401:
+                    logger.warning("Token Twitch invalide, renouvellement...")
+                    await self.get_token()
+                    return await self.get_streams(usernames)
+                else:
+                    logger.error(f"Erreur API Twitch streams: {response.status}")
+                    return []
+    except Exception as e:
+        logger.error(f"Exception lors de la récupération des streams: {e}")
+        return []
+async def get_user_info(self, username):
         await self.ensure_valid_token()
         url = "https://api.twitch.tv/helix/users"
         params = {'login': username}
@@ -160,32 +160,32 @@ class TwitchAPI:
             if not self.token or (self.token_expires_at and datetime.now(UTC).timestamp() >= self.token_expires_at - 300):
             await self.get_token()
 
-            async def get_streams(self, usernames):
-                if not usernames:
-                return []
+            
+async def get_streams(self, usernames):
+    if not usernames:
+        return []
 
-            await self.ensure_valid_token()
-            url = "https://api.twitch.tv/helix/streams"
-            params = {'user_login': usernames}
+    await self.ensure_valid_token()
+    url = "https://api.twitch.tv/helix/streams"
+    params = {'user_login': usernames}
 
-            try:
-                async with aiohttp.ClientSession() as session:
-                async with session.get(url, headers=self.headers, params=params) as response:
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=self.headers, params=params) as response:
                 if response.status == 200:
-                data = await response.json()
-                return data['data']
-            elif response.status == 401:
-            logger.warning("Token Twitch invalide, renouvellement...")
-            await self.get_token()
-            return await self.get_streams(usernames)
-        else:
-            logger.error(f"Erreur API Twitch streams: {response.status}")
-            return []
-        except Exception as e:
-            logger.error(f"Exception lors de la récupération des streams: {e}")
-            return []
-
-    async def get_user_info(self, username):
+                    data = await response.json()
+                    return data['data']
+                elif response.status == 401:
+                    logger.warning("Token Twitch invalide, renouvellement...")
+                    await self.get_token()
+                    return await self.get_streams(usernames)
+                else:
+                    logger.error(f"Erreur API Twitch streams: {response.status}")
+                    return []
+    except Exception as e:
+        logger.error(f"Exception lors de la récupération des streams: {e}")
+        return []
+async def get_user_info(self, username):
         await self.ensure_valid_token()
         url = "https://api.twitch.tv/helix/users"
         params = {'login': username}
@@ -244,42 +244,32 @@ class TwitchAPI:
             async def ensure_valid_token(self):
                 if not self.token or (self.token_expires_at and datetime.now(UTC).timestamp() >= self.token_expires_at - 300):
                 await self.get_token()
-                async def get_streams(self, usernames):
-                    if not usernames:
-                    return []
-                await self.ensure_valid_token()
-                url = "https://api.twitch.tv/helix/streams"
-                params = {'user_login': usernames}
-                async with aiohttp.ClientSession() as session:
-                async with session.get(url, headers=self.headers, params=params) as response:
+                
+async def get_streams(self, usernames):
+    if not usernames:
+        return []
+
+    await self.ensure_valid_token()
+    url = "https://api.twitch.tv/helix/streams"
+    params = {'user_login': usernames}
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=self.headers, params=params) as response:
                 if response.status == 200:
-                data = await response.json()
-                return data['data']
-            elif response.status == 401:
-            logger.warning("Token Twitch invalide, renouvellement...")
-            await self.get_token()
-            return await self.get_streams(usernames)
-        else:
-            logger.error(f"Erreur API Twitch streams: {response.status}")
-            return []
-        except Exception as e:
-            logger.error(f"Exception lors de la récupération des streams: {e}")
-            return []
-    async def get_user_info(self, username):
-        await self.ensure_valid_token()
-        url = "https://api.twitch.tv/helix/users"
-        params = {'login': username}
-        logger.info("get_user_info called")
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, headers=self.headers, params=params) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        return data['data'][0] if data['data'] else None
-                    elif response.status == 401:
-                        logger.warning("Token Twitch invalide, renouvellement...")
-                        await self.get_token()
-                        return await self.get_user_info(username)
+                    data = await response.json()
+                    return data['data']
+                elif response.status == 401:
+                    logger.warning("Token Twitch invalide, renouvellement...")
+                    await self.get_token()
+                    return await self.get_streams(usernames)
+                else:
+                    logger.error(f"Erreur API Twitch streams: {response.status}")
+                    return []
+    except Exception as e:
+        logger.error(f"Exception lors de la récupération des streams: {e}")
+        return []
+get_user_info(username)
                     else:
                         logger.error(f"Erreur API Twitch user: {response.status}")
                         return None
@@ -300,44 +290,33 @@ class TwitchAPI:
             if self.session:
             await self.session.close()
             self.session = None
-            async def check_player_ingame(self, summoner_name, region='euw'):
-                """Vérifie si un joueur est en game sur op.gg"""
-                try:
-                    session = await self.get_session()
-                    # Nettoyer le nom du joueur
-                    clean_name = summoner_name.replace(' ', '%20')
-                    url = f"https://op.gg/summoners/{region}/{clean_name}"
+            
+async def check_player_ingame(self, summoner_name, region='euw'):
+    """Vérifie si un joueur est en game sur op.gg"""
+    try:
+        session = await self.get_session()
+        clean_name = summoner_name.replace(' ', '%20')
+        url = f"https://op.gg/summoners/{region}/{clean_name}"
 
-                    async with session.get(url) as response:
-                    if response.status == 200:
-                    html = await response.text()
-                    soup = BeautifulSoup(html, 'html.parser')
+        async with session.get(url) as response:
+            if response.status == 200:
+                html = await response.text()
+                soup = BeautifulSoup(html, 'html.parser')
 
-                    # Chercher les indicateurs de partie en cours
-                    # Op.gg affiche "Live Game" ou "En direct" quand quelqu'un est en game
-                    live_indicators = [
-                    'Live Game',
-                    'En direct',
-                    'live-game',
-                    'spectate',
-                    'In Game'
-                    ]
-
-                    for indicator in live_indicators:
+                live_indicators = ['Live Game', 'En direct', 'live-game', 'spectate', 'In Game']
+                for indicator in live_indicators:
                     if indicator.lower() in html.lower():
-                    # Extraire plus d'informations sur la partie
-                    game_info = await self.extract_game_info(html, summoner_name)
-                    return game_info
-
+                        game_info = await self.extract_game_info(html, summoner_name)
+                        return game_info
                 return None
             else:
                 logger.warning(f"Erreur {response.status} pour {summoner_name}")
                 return None
 
-            except Exception as e:
-                logger.error(f"Erreur lors de la vérification de {summoner_name}: {e}")
-                return None
-            async def extract_game_info(self, html, summoner_name):
+    except Exception as e:
+        logger.error(f"Erreur lors de la vérification de {summoner_name}: {e}")
+        return None
+async def extract_game_info(self, html, summoner_name):
                 """Extrait les informations de la partie en cours"""
                 try:
                     soup = BeautifulSoup(html, 'html.parser')
