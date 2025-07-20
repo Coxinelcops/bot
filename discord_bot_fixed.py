@@ -36,10 +36,10 @@ TWITCH_CLIENT_ID = "tejcc6qy12vbclkl2qige9szpfoher"
 TWITCH_CLIENT_SECRET = "18jywkay5xbbo5d2028f4fxwyf0txk"
 
 streamers = {}
-stream_messages = {}
+stream_messages = {}  # Format: {channel_id_username: {'message_id': id, 'last_update': timestamp}}
 ping_roles = {}
 notification_channels = {}
-reaction_role_messages = {}  # Nouveau: stockage des messages pour les rôles par réaction
+reaction_role_messages = {}
 
 class TwitchAPI:
     def __init__(self):
@@ -134,7 +134,7 @@ async def on_ready():
     if not check_streams.is_running():
         check_streams.start()
 
-@tasks.loop(minutes=1)
+@tasks.loop(minutes=2)  # Changé à 2 minutes pour une mise à jour plus fréquente
 async def check_streams():
     try:
         for channel_id, streamer_list in streamers.items():
@@ -147,38 +147,119 @@ async def check_streams():
                 continue
 
             streams = await twitch_api.get_streams(streamer_list)
-            currently_live = {stream['user_login'].lower() for stream in streams}
+            currently_live = {stream['user_login'].lower(): stream for stream in streams}
 
-            for stream in streams:
-                username = stream['user_login'].lower()
+            # Gérer les streams en cours
+            for username, stream in currently_live.items():
                 message_key = f"{channel_id}_{username}"
-
-                if message_key not in stream_messages:
+                
+                if message_key in stream_messages:
+                    # Mettre à jour le message existant
+                    await update_stream_message(channel, stream, message_key)
+                else:
+                    # Créer un nouveau message
                     await send_stream_notification(channel, stream)
 
+            # Supprimer les messages des streams qui ne sont plus live
             to_remove = []
-            for message_key, message_id in stream_messages.items():
+            for message_key, message_data in stream_messages.items():
                 if message_key.startswith(f"{channel_id}_"):
                     username = message_key.split('_', 1)[1]
                     if username not in currently_live:
-                        try:
-                            message = await channel.fetch_message(message_id)
-                            await message.delete()
-                            to_remove.append(message_key)
-                        except discord.NotFound:
-                            to_remove.append(message_key)
-                        except discord.Forbidden:
-                            logger.warning(f"Pas de permission pour supprimer le message de {username}")
-                            to_remove.append(message_key)
-                        except Exception as e:
-                            logger.error(f"Erreur lors de la suppression du message: {e}")
-                            to_remove.append(message_key)
+                        await remove_stream_message(channel, message_key, username)
+                        to_remove.append(message_key)
 
             for message_key in to_remove:
                 stream_messages.pop(message_key, None)
 
     except Exception as e:
         logger.error(f"Erreur dans check_streams: {e}")
+
+async def update_stream_message(channel, stream, message_key):
+    """Met à jour un message de stream existant avec les nouvelles informations"""
+    try:
+        message_data = stream_messages[message_key]
+        message_id = message_data['message_id']
+        
+        # Récupérer le message existant
+        try:
+            message = await channel.fetch_message(message_id)
+        except discord.NotFound:
+            # Le message a été supprimé, créer un nouveau
+            await send_stream_notification(channel, stream)
+            return
+        
+        username = stream['user_login']
+        game_name = stream['game_name'] or "Pas de catégorie"
+        viewer_count = stream['viewer_count']
+        title = stream['title'] or "Pas de titre"
+        
+        # Créer l'embed mis à jour
+        embed = discord.Embed(
+            title=f"🔴 {stream['user_name']} est en live !",
+            description=f"**{title}**",
+            color=0x9146ff,
+            url=f"https://twitch.tv/{username}"
+        )
+        embed.add_field(name="🎮 Catégorie", value=game_name, inline=True)
+        embed.add_field(name="👥 Viewers", value=f"{viewer_count:,}", inline=True)
+        embed.add_field(name="🔗 Lien", value=f"[Regarder le stream](https://twitch.tv/{username})", inline=False)
+        
+        if stream.get('thumbnail_url'):
+            # Ajouter un timestamp pour forcer le rafraîchissement de l'image
+            thumbnail = stream['thumbnail_url'].replace('{width}', '320').replace('{height}', '180')
+            thumbnail += f"?t={int(datetime.now().timestamp())}"
+            embed.set_image(url=thumbnail)
+        
+        embed.set_footer(text=f"Dernière mise à jour: {datetime.now(UTC).strftime('%H:%M:%S')} UTC")
+        embed.timestamp = datetime.now(UTC)
+        
+        # Mettre à jour le message
+        await message.edit(embed=embed)
+        
+        # Mettre à jour le timestamp de dernière mise à jour
+        stream_messages[message_key]['last_update'] = datetime.now(UTC).timestamp()
+        
+        logger.info(f"Message mis à jour pour {username} dans {channel.name}")
+        
+    except discord.Forbidden:
+        logger.error(f"Pas de permission pour modifier le message dans {channel.name}")
+    except Exception as e:
+        logger.error(f"Erreur lors de la mise à jour du message: {e}")
+
+async def remove_stream_message(channel, message_key, username):
+    """Supprime un message de stream quand le stream se termine"""
+    try:
+        message_data = stream_messages[message_key]
+        message_id = message_data['message_id']
+        
+        try:
+            message = await channel.fetch_message(message_id)
+            
+            # Créer un embed de fin de stream
+            end_embed = discord.Embed(
+                title=f"⚫ {username} n'est plus en live",
+                description="Le stream s'est terminé",
+                color=0x808080
+            )
+            end_embed.set_footer(text=f"Stream terminé à {datetime.now(UTC).strftime('%H:%M:%S')} UTC")
+            
+            # Modifier le message pour indiquer la fin, puis le supprimer après 30 secondes
+            await message.edit(embed=end_embed)
+            await asyncio.sleep(30)
+            await message.delete()
+            
+            logger.info(f"Message de fin de stream pour {username} supprimé après 30 secondes")
+            
+        except discord.NotFound:
+            logger.info(f"Message pour {username} déjà supprimé")
+        except discord.Forbidden:
+            logger.warning(f"Pas de permission pour modifier/supprimer le message de {username}")
+        except Exception as e:
+            logger.error(f"Erreur lors de la suppression du message: {e}")
+            
+    except KeyError:
+        logger.warning(f"Message key {message_key} non trouvé dans stream_messages")
 
 @check_streams.before_loop
 async def before_check_streams():
@@ -203,8 +284,10 @@ async def send_stream_notification(channel, stream):
 
         if stream.get('thumbnail_url'):
             thumbnail = stream['thumbnail_url'].replace('{width}', '320').replace('{height}', '180')
+            thumbnail += f"?t={int(datetime.now().timestamp())}"  # Force le rafraîchissement
             embed.set_image(url=thumbnail)
 
+        embed.set_footer(text=f"Stream démarré • Mise à jour toutes les 2 minutes")
         embed.timestamp = datetime.now(UTC)
 
         content = ""
@@ -215,7 +298,10 @@ async def send_stream_notification(channel, stream):
 
         message = await channel.send(content=content, embed=embed)
         message_key = f"{channel.id}_{username.lower()}"
-        stream_messages[message_key] = message.id
+        stream_messages[message_key] = {
+            'message_id': message.id,
+            'last_update': datetime.now(UTC).timestamp()
+        }
 
         logger.info(f"Notification envoyée pour {username} dans {channel.name}")
 
@@ -344,7 +430,8 @@ async def remove_streamer(ctx, username=None):
     message_key = f"{channel_id}_{username}"
     if message_key in stream_messages:
         try:
-            message = await ctx.channel.fetch_message(stream_messages[message_key])
+            message_id = stream_messages[message_key]['message_id']
+            message = await ctx.channel.fetch_message(message_id)
             await message.delete()
         except:
             pass
@@ -367,6 +454,7 @@ async def list_streamers(ctx):
         description="\n".join(f"• {streamer}" for streamer in streamers[channel_id]),
         color=0x9146ff
     )
+    embed.set_footer(text="Mise à jour automatique toutes les 2 minutes")
     await ctx.send(embed=embed)
 
 @bot.command(name='pingrole')
@@ -505,7 +593,7 @@ async def stream_help(ctx):
     embed.add_field(name="!liststreamer", value="Afficher la liste des streamers surveillés", inline=False)
     embed.add_field(name="!pingrole [@role]", value="Définir le rôle à ping (sans rôle = désactiver)", inline=False)
     embed.add_field(name="!reactionrole [@role] [emoji]", value="Créer un message pour obtenir un rôle par réaction", inline=False)
-    embed.set_footer(text="Les commandes addstreamer et removestreamer s'auto-suppriment après 5 secondes")
+    embed.set_footer(text="⏱️ Mise à jour automatique toutes les 2 minutes • Messages auto-supprimés après 5 secondes")
     await ctx.send(embed=embed)
 
 @bot.event
