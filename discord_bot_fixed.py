@@ -1,4 +1,3 @@
-import discord
 from discord.ext import commands, tasks
 import aiohttp
 import json
@@ -224,6 +223,4 @@ async def send_stream_notification(channel, stream):
     except discord.Forbidden:
         logger.error(f"Pas de permission pour envoyer un message dans {channel.name}")
     except Exception as e:
-        logger.error(f"Erreur lors de l'envoi de la notification: {e}"))
-
-        
+        logger.error(f"Erreur lors de l'envoi de la notification: {e}")
