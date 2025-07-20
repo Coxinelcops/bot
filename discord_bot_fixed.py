@@ -158,12 +158,10 @@ class TwitchAPI:
             return False
         async def ensure_valid_token(self):
             if not self.token or (self.token_expires_at and datetime.now(UTC).timestamp() >= self.token_expires_at - 300):
-                 pass
             await self.get_token()
 
             async def get_streams(self, usernames):
                 if not usernames:
-                     pass
                 return []
 
             await self.ensure_valid_token()
@@ -174,11 +172,9 @@ class TwitchAPI:
                 async with aiohttp.ClientSession() as session:
                 async with session.get(url, headers=self.headers, params=params) as response:
                 if response.status == 200:
-                     pass
                 data = await response.json()
                 return data['data']
             elif response.status == 401:
-                 pass
             logger.warning("Token Twitch invalide, renouvellement...")
             await self.get_token()
             return await self.get_streams(usernames)
@@ -247,11 +243,9 @@ class TwitchAPI:
             return False
             async def ensure_valid_token(self):
                 if not self.token or (self.token_expires_at and datetime.now(UTC).timestamp() >= self.token_expires_at - 300):
-                     pass
                 await self.get_token()
                 async def get_streams(self, usernames):
                     if not usernames:
-                         pass
                     return []
                 await self.ensure_valid_token()
                 url = "https://api.twitch.tv/helix/streams"
@@ -259,11 +253,9 @@ class TwitchAPI:
                 async with aiohttp.ClientSession() as session:
                 async with session.get(url, headers=self.headers, params=params) as response:
                 if response.status == 200:
-                     pass
                 data = await response.json()
                 return data['data']
             elif response.status == 401:
-                 pass
             logger.warning("Token Twitch invalide, renouvellement...")
             await self.get_token()
             return await self.get_streams(usernames)
@@ -302,12 +294,10 @@ class TwitchAPI:
         }
         async def get_session(self):
             if not self.session:
-                 pass
             self.session = aiohttp.ClientSession(headers=self.headers)
             return self.session
         async def close_session(self):
             if self.session:
-                 pass
             await self.session.close()
             self.session = None
             async def check_player_ingame(self, summoner_name, region='euw'):
@@ -320,7 +310,6 @@ class TwitchAPI:
 
                     async with session.get(url) as response:
                     if response.status == 200:
-                         pass
                     html = await response.text()
                     soup = BeautifulSoup(html, 'html.parser')
 
@@ -336,7 +325,6 @@ class TwitchAPI:
 
                     for indicator in live_indicators:
                     if indicator.lower() in html.lower():
-                         pass
                     # Extraire plus d'informations sur la partie
                     game_info = await self.extract_game_info(html, summoner_name)
                     return game_info
@@ -366,13 +354,11 @@ class TwitchAPI:
                 # Essayer d'extraire le champion joué
                 champion_img = soup.find('img', {'class': re.compile(r'champion|Champion')})
                 if champion_img and champion_img.get('alt'):
-                     pass
                 game_info['champion'] = champion_img['alt']
 
                 # Essayer d'extraire le rang
                 rank_element = soup.find('div', {'class': re.compile(r'tier|Tier|rank|Rank')})
                 if rank_element:
-                     pass
                 game_info['rank'] = rank_element.get_text(strip=True)
 
                 return game_info
@@ -396,11 +382,9 @@ class TwitchAPI:
 
                 async with session.get(url) as response:
                 if response.status == 200:
-                     pass
                 html = await response.text()
                 # Vérifier si la page contient des informations de joueur
                 if 'summoner not found' not in html.lower() and 'niveau' in html.lower():
-                     pass
                 return True
             return False
         except Exception as e:
@@ -412,35 +396,28 @@ class TwitchAPI:
             print(f'{bot.user} est connecté et prêt !')
             await twitch_api.get_token()
             if not check_streams.is_running():
-                 pass
             check_streams.start()
             if not check_lol_games.is_running():
-                 pass
             check_lol_games.start()
             @tasks.loop(minutes=1)
             async def check_streams():
                 for channel_id, streamer_list in streamers.items():
                 if not streamer_list:
-                     pass
                 continue
             channel = bot.get_channel(channel_id)
             if not channel:
-                 pass
             logger.warning(f"Channel {channel_id} non trouvé")
             continue
         streams = await twitch_api.get_streams(streamer_list)
         currently_live = {stream['user_login'].lower() for stream in streams}
         for stream in streams:
-             pass
         username = stream['user_login'].lower()
         message_key = f"{channel_id}_{username}"
         if message_key not in stream_messages:
-             pass
         await send_stream_notification(channel, stream)
         to_remove = []
         for message_key, message_id in stream_messages.items():
         if message_key.startswith(f"{channel_id}_"):
-             pass
         username = message_key.split('_', 1)[1]
         if username not in currently_live:
         try:
@@ -456,7 +433,6 @@ class TwitchAPI:
                         logger.error(f"Erreur lors de la suppression du message: {e}")
                         to_remove.append(message_key)
                         for message_key in to_remove:
-                             pass
                         stream_messages.pop(message_key, None)
                         logger.error(f"Erreur dans check_streams: {e}")
                         @tasks.loop(minutes=2)  # Vérifier toutes les 2 minutes pour éviter de spam op.gg
@@ -464,30 +440,24 @@ class TwitchAPI:
                             """Vérifie les parties LoL en cours"""
                             for channel_id, player_list in lol_players.items():
                             if not player_list:
-                                 pass
                             continue
                         channel = bot.get_channel(channel_id)
                         if not channel:
-                             pass
                         logger.warning(f"Channel {channel_id} non trouvé")
                         continue
                     currently_ingame = set()
                     for player in player_list:
-                         pass
                     game_info = await opgg_api.check_player_ingame(player)
                     if game_info:
-                         pass
                     currently_ingame.add(player.lower())
                     message_key = f"{channel_id}_{player.lower()}"
 
                     if message_key not in lol_game_messages:
-                         pass
                     await send_lol_game_notification(channel, game_info)
                     # Supprimer les messages des parties terminées
                     to_remove = []
                     for message_key, message_id in lol_game_messages.items():
                     if message_key.startswith(f"{channel_id}_"):
-                         pass
                     player = message_key.split('_', 1)[1]
                     if player not in currently_ingame:
                     try:
@@ -503,7 +473,6 @@ class TwitchAPI:
                                     logger.error(f"Erreur lors de la suppression du message: {e}")
                                     to_remove.append(message_key)
                                     for message_key in to_remove:
-                                         pass
                                     lol_game_messages.pop(message_key, None)
                                     except Exception as e:
                                         logger.error(f"Erreur dans check_lol_games: {e}")
@@ -529,16 +498,13 @@ class TwitchAPI:
                                                         embed.add_field(name="👥 Viewers", value=f"{viewer_count:,}", inline=True)
                                                         embed.add_field(name="🔗 Lien", value=f"[Regarder le stream](https://twitch.tv/{username})", inline=False)
                                                         if stream.get('thumbnail_url'):
-                                                             pass
                                                         thumbnail = stream['thumbnail_url'].replace('{width}', '320').replace('{height}', '180')
                                                         embed.set_image(url=thumbnail)
                                                         embed.timestamp = datetime.now(UTC)
                                                         content = ""
                                                         if channel.id in ping_roles:
-                                                             pass
                                                         role = channel.guild.get_role(ping_roles[channel.id])
                                                         if role:
-                                                             pass
                                                         content = f"{role.mention} "
                                                         message = await channel.send(content=content, embed=embed)
                                                         message_key = f"{channel.id}_{username.lower()}"
@@ -567,10 +533,8 @@ class TwitchAPI:
                                                                     embed.set_footer(text="League of Legends • OP.GG")
                                                                     content = ""
                                                                     if channel.id in lol_ping_roles:
-                                                                         pass
                                                                     role = channel.guild.get_role(lol_ping_roles[channel.id])
                                                                     if role:
-                                                                         pass
                                                                     content = f"{role.mention} "
                                                                     message = await channel.send(content=content, embed=embed)
                                                                     # Ajouter une réaction pour accès rapide
@@ -587,17 +551,13 @@ class TwitchAPI:
                                                                                 try:
                                                                                     await asyncio.sleep(5)
                                                                                     if ctx.message:
-                                                                                         pass
                                                                                     await ctx.message.delete()
                                                                                     if response_message:
-                                                                                         pass
                                                                                     await response_message.delete()
                                                                                     except discord.NotFound:
                                                                                         except discord.Forbidden:
-                                                                                            pass
                                                                                         # === Commandes LoL ===
                                                                                         try:
-                                                                                             pass
 
 
 
@@ -627,7 +587,6 @@ class TwitchAPI:
 
 
                                                                                             try:
-                                                                                                 pass
 
 
 
@@ -639,7 +598,6 @@ class TwitchAPI:
 
 
                                                                                                 try:
-                                                                                                    pass
 
 
 
@@ -652,7 +610,6 @@ class TwitchAPI:
 
                                                                                                 try:
                                                                                                     except Exception as e:
-                                                                                                         pass
 
 
 
@@ -664,7 +621,6 @@ class TwitchAPI:
                                                                                                         try:
                                                                                                             except discord.Forbidden:
                                                                                                                 except Exception as e:
-                                                                                                                     pass
 
 
 
@@ -680,7 +636,6 @@ class TwitchAPI:
                                                                                                                     async def add_lol_player(ctx, summoner_name=None, region='euw'):
                                                                                                                         """Ajoute un joueur LoL à surveiller"""
                                                                                                                         if summoner_name is None:
-                                                                                                                             pass
                                                                                                                         response = await ctx.send("❌ Veuillez spécifier un nom d'invocateur !\nExemple: `!addlol Faker`")
                                                                                                                         asyncio.create_task(delete_command_messages(ctx, response))
                                                                                                                         return
@@ -689,24 +644,20 @@ class TwitchAPI:
                                                                                                                     summoner_name = summoner_name.strip()
 
                                                                                                                     if not summoner_name:
-                                                                                                                         pass
                                                                                                                     response = await ctx.send("❌ Nom d'invocateur invalide !")
                                                                                                                     asyncio.create_task(delete_command_messages(ctx, response))
                                                                                                                     return
 
                                                                                                                 if channel_id not in lol_players:
-                                                                                                                     pass
                                                                                                                 lol_players[channel_id] = []
 
                                                                                                                 if summoner_name.lower() in [p.lower() for p in lol_players[channel_id]]:
-                                                                                                                     pass
                                                                                                                 response = await ctx.send(f"❌ {summoner_name} est déjà dans la liste !")
                                                                                                                 asyncio.create_task(delete_command_messages(ctx, response))
                                                                                                                 return
 
                                                                                                             # Valider que le joueur existe
                                                                                                             if not await opgg_api.validate_summoner(summoner_name, region):
-                                                                                                                 pass
                                                                                                             response = await ctx.send(f"❌ Le joueur {summoner_name} n'existe pas sur {region.upper()} !")
                                                                                                             asyncio.create_task(delete_command_messages(ctx, response))
                                                                                                             return
@@ -721,7 +672,6 @@ class TwitchAPI:
                                                                                                         async def remove_lol_player(ctx, summoner_name=None):
                                                                                                             """Retire un joueur LoL de la surveillance"""
                                                                                                             if summoner_name is None:
-                                                                                                                 pass
                                                                                                             response = await ctx.send("❌ Veuillez spécifier un nom d'invocateur !")
                                                                                                             asyncio.create_task(delete_command_messages(ctx, response))
                                                                                                             return
@@ -730,7 +680,6 @@ class TwitchAPI:
                                                                                                         summoner_name = summoner_name.strip()
 
                                                                                                         if channel_id not in lol_players:
-                                                                                                             pass
                                                                                                         response = await ctx.send("❌ Aucun joueur LoL surveillé dans ce channel !")
                                                                                                         asyncio.create_task(delete_command_messages(ctx, response))
                                                                                                         return
@@ -739,12 +688,10 @@ class TwitchAPI:
                                                                                                     player_to_remove = None
                                                                                                     for player in lol_players[channel_id]:
                                                                                                     if player.lower() == summoner_name.lower():
-                                                                                                         pass
                                                                                                     player_to_remove = player
                                                                                                     break
 
                                                                                                 if not player_to_remove:
-                                                                                                     pass
                                                                                                 response = await ctx.send(f"❌ {summoner_name} n'est pas dans la liste !")
                                                                                                 asyncio.create_task(delete_command_messages(ctx, response))
                                                                                                 return
@@ -758,7 +705,6 @@ class TwitchAPI:
                                                                                                 message = await ctx.channel.fetch_message(lol_game_messages[message_key])
                                                                                                 await message.delete()
                                                                                                 except:
-                                                                                                    pass
                                                                                                 finally:
                                                                                                     lol_game_messages.pop(message_key, None)
 
@@ -772,7 +718,6 @@ class TwitchAPI:
                                                                                                         channel_id = ctx.channel.id
 
                                                                                                         if channel_id not in lol_players or not lol_players[channel_id]:
-                                                                                                             pass
                                                                                                         await ctx.send("📋 Aucun joueur LoL surveillé dans ce channel !")
                                                                                                         return
 
@@ -793,7 +738,6 @@ class TwitchAPI:
 
                                                                                                         if role is None:
                                                                                                         if channel_id in lol_ping_roles:
-                                                                                                             pass
                                                                                                         del lol_ping_roles[channel_id]
                                                                                                         await ctx.send("✅ Rôle de ping LoL désactivé pour ce channel !")
                                                                                                         return
@@ -806,7 +750,6 @@ class TwitchAPI:
                                                                                                     @commands.has_permissions(manage_channels=True)
                                                                                                     async def add_streamer(ctx, username=None):
                                                                                                         if username is None:
-                                                                                                             pass
                                                                                                         response = await ctx.send("❌ Veuillez spécifier un nom d'utilisateur Twitch !")
                                                                                                         asyncio.create_task(delete_command_messages(ctx, response))
                                                                                                         return
@@ -815,24 +758,20 @@ class TwitchAPI:
                                                                                                     username = username.lower().replace('@', '').strip()
 
                                                                                                     if not username:
-                                                                                                         pass
                                                                                                     response = await ctx.send("❌ Nom d'utilisateur invalide !")
                                                                                                     asyncio.create_task(delete_command_messages(ctx, response))
                                                                                                     return
 
                                                                                                 if channel_id not in streamers:
-                                                                                                     pass
                                                                                                 streamers[channel_id] = []
 
                                                                                                 if username in streamers[channel_id]:
-                                                                                                     pass
                                                                                                 response = await ctx.send(f"❌ {username} est déjà dans la liste !")
                                                                                                 asyncio.create_task(delete_command_messages(ctx, response))
                                                                                                 return
 
                                                                                             user_info = await twitch_api.get_user_info(username)
                                                                                             if not user_info:
-                                                                                                 pass
                                                                                             response = await ctx.send(f"❌ Le streamer {username} n'existe pas sur Twitch !")
                                                                                             asyncio.create_task(delete_command_messages(ctx, response))
                                                                                             return
@@ -846,14 +785,12 @@ class TwitchAPI:
                                                                                         @commands.has_permissions(manage_channels=True)
                                                                                         async def add_streamers(ctx, *usernames):
                                                                                             if not usernames:
-                                                                                                 pass
                                                                                             response = await ctx.send("❌ Veuillez spécifier au moins un nom d'utilisateur Twitch !\nExemple: `!addstreamers streamer1 streamer2 streamer3`")
                                                                                             asyncio.create_task(delete_command_messages(ctx, response))
                                                                                             return
 
                                                                                         channel_id = ctx.channel.id
                                                                                         if channel_id not in streamers:
-                                                                                             pass
                                                                                         streamers[channel_id] = []
 
                                                                                         added_streamers = []
@@ -861,21 +798,17 @@ class TwitchAPI:
                                                                                         invalid_streamers = []
 
                                                                                         for username in usernames:
-                                                                                             pass
                                                                                         username = username.lower().replace('@', '').strip()
 
                                                                                         if not username:
-                                                                                             pass
                                                                                         continue
 
                                                                                     if username in streamers[channel_id]:
-                                                                                         pass
                                                                                     already_exists.append(username)
                                                                                     continue
 
                                                                                 user_info = await twitch_api.get_user_info(username)
                                                                                 if not user_info:
-                                                                                     pass
                                                                                 invalid_streamers.append(username)
                                                                                 continue
 
@@ -885,19 +818,15 @@ class TwitchAPI:
                                                                             message_parts = []
 
                                                                             if added_streamers:
-                                                                                 pass
                                                                             message_parts.append(f"✅ **Streamers ajoutés:** {', '.join(added_streamers)}")
 
                                                                             if already_exists:
-                                                                                 pass
                                                                             message_parts.append(f"⚠️ **Déjà dans la liste:** {', '.join(already_exists)}")
 
                                                                             if invalid_streamers:
-                                                                                 pass
                                                                             message_parts.append(f"❌ **Streamers introuvables:** {', '.join(invalid_streamers)}")
 
                                                                             if not message_parts:
-                                                                                 pass
                                                                             message_parts.append("❌ Aucun streamer valide fourni !")
 
                                                                             response = await ctx.send("\n".join(message_parts))
@@ -908,7 +837,6 @@ class TwitchAPI:
                                                                             @commands.has_permissions(manage_channels=True)
                                                                             async def remove_streamer(ctx, username=None):
                                                                                 if username is None:
-                                                                                     pass
                                                                                 response = await ctx.send("❌ Veuillez spécifier un nom d'utilisateur Twitch !")
                                                                                 asyncio.create_task(delete_command_messages(ctx, response))
                                                                                 return
@@ -917,7 +845,6 @@ class TwitchAPI:
                                                                             username = username.lower().replace('@', '').strip()
 
                                                                             if channel_id not in streamers or username not in streamers[channel_id]:
-                                                                                 pass
                                                                             response = await ctx.send(f"❌ {username} n'est pas dans la liste !")
                                                                             asyncio.create_task(delete_command_messages(ctx, response))
                                                                             return
@@ -930,7 +857,6 @@ class TwitchAPI:
                                                                             message = await ctx.channel.fetch_message(stream_messages[message_key])
                                                                             await message.delete()
                                                                             except:
-                                                                                pass
                                                                             finally:
                                                                                 stream_messages.pop(message_key, None)
 
@@ -943,7 +869,6 @@ class TwitchAPI:
                                                                                     channel_id = ctx.channel.id
 
                                                                                     if channel_id not in streamers or not streamers[channel_id]:
-                                                                                         pass
                                                                                     await ctx.send("📋 Aucun streamer surveillé dans ce channel !")
                                                                                     return
 
@@ -962,7 +887,6 @@ class TwitchAPI:
 
                                                                                     if role is None:
                                                                                     if channel_id in ping_roles:
-                                                                                         pass
                                                                                     del ping_roles[channel_id]
                                                                                     await ctx.send("✅ Rôle de ping Twitch désactivé pour ce channel !")
                                                                                     return
@@ -976,7 +900,6 @@ class TwitchAPI:
                                                                                 async def create_reaction_role(ctx, role: discord.Role = None, emoji: str = "🔔"):
                                                                                     """Crée un message sur lequel les utilisateurs peuvent réagir pour obtenir un rôle"""
                                                                                     if role is None:
-                                                                                         pass
                                                                                     await ctx.send("❌ Veuillez spécifier un rôle !\nExemple: `!reactionrole @Notifications 🔔`")
                                                                                     return
 
@@ -994,7 +917,6 @@ class TwitchAPI:
                                                                                 try:
                                                                                     await ctx.message.delete()
                                                                                     except:
-                                                                                        pass
 
                                                                                     # Envoyer le message et ajouter la réaction
                                                                                     message = await ctx.send(embed=embed)
@@ -1013,31 +935,26 @@ class TwitchAPI:
                                                                                 async def on_reaction_add(reaction, user):
                                                                                     """Gère l'ajout de réactions pour donner des rôles et accès rapide aux liens"""
                                                                                     if user.bot:
-                                                                                         pass
                                                                                     return
 
                                                                                 # Système de rôles par réaction
                                                                                 message_id = reaction.message.id
                                                                                 if message_id in reaction_role_messages:
-                                                                                     pass
                                                                                 role_data = reaction_role_messages[message_id]
 
                                                                                 # Vérifier si c'est le bon emoji
                                                                                 if str(reaction.emoji) != role_data['emoji']:
-                                                                                     pass
                                                                                 return
 
                                                                             # Récupérer le rôle et l'utilisateur
                                                                             guild = bot.get_guild(role_data['guild_id'])
                                                                             if not guild:
-                                                                                 pass
                                                                             return
 
                                                                         role = guild.get_role(role_data['role_id'])
                                                                         member = guild.get_member(user.id)
 
                                                                         if not role or not member:
-                                                                             pass
                                                                         return
 
                                                                     # Ajouter le rôle
@@ -1052,11 +969,9 @@ class TwitchAPI:
 
                                                                             # Gestion des réactions sur les messages LoL (accès rapide au spectate)
                                                                             if str(reaction.emoji) == "👁️":
-                                                                                 pass
                                                                             # Vérifier si c'est un message de notification LoL
                                                                             for message_key, stored_message_id in lol_game_messages.items():
                                                                             if stored_message_id == message_id:
-                                                                                 pass
                                                                             # Extraire le nom du joueur
                                                                             player_name = message_key.split('_', 1)[1]
                                                                             spectate_url = f"https://op.gg/summoners/euw/{player_name.replace(' ', '%20')}"
@@ -1075,32 +990,27 @@ class TwitchAPI:
                                                                                     async def on_reaction_remove(reaction, user):
                                                                                         """Gère la suppression de réactions pour retirer des rôles"""
                                                                                         if user.bot:
-                                                                                             pass
                                                                                         return
 
                                                                                     message_id = reaction.message.id
                                                                                     if message_id not in reaction_role_messages:
-                                                                                         pass
                                                                                     return
 
                                                                                 role_data = reaction_role_messages[message_id]
 
                                                                                 # Vérifier si c'est le bon emoji
                                                                                 if str(reaction.emoji) != role_data['emoji']:
-                                                                                     pass
                                                                                 return
 
                                                                             # Récupérer le rôle et l'utilisateur
                                                                             guild = bot.get_guild(role_data['guild_id'])
                                                                             if not guild:
-                                                                                 pass
                                                                             return
 
                                                                         role = guild.get_role(role_data['role_id'])
                                                                         member = guild.get_member(user.id)
 
                                                                         if not role or not member:
-                                                                             pass
                                                                         return
 
                                                                     # Retirer le rôle
@@ -1217,22 +1127,16 @@ class TwitchAPI:
                                                                                             @bot.event
                                                                                             async def on_command_error(ctx, error):
                                                                                                 if isinstance(error, commands.MissingPermissions):
-                                                                                                     pass
                                                                                                 response = await ctx.send("❌ Vous n'avez pas les permissions nécessaires pour cette commande !")
                                                                                                 if ctx.command.name in ['addstreamer', 'removestreamer', 'addstreamers', 'addlol', 'removelol']:
-                                                                                                     pass
                                                                                                 asyncio.create_task(delete_command_messages(ctx, response))
                                                                                                 elif isinstance(error, commands.BadArgument):
-                                                                                                     pass
                                                                                                 response = await ctx.send("❌ Argument invalide ! Utilisez `!help` pour voir les commandes.")
                                                                                                 if ctx.command.name in ['addstreamer', 'removestreamer', 'addstreamers', 'addlol', 'removelol']:
-                                                                                                     pass
                                                                                                 asyncio.create_task(delete_command_messages(ctx, response))
                                                                                                 elif isinstance(error, commands.MissingRequiredArgument):
-                                                                                                     pass
                                                                                                 response = await ctx.send("❌ Argument manquant ! Utilisez `!help` pour voir les commandes.")
                                                                                                 if ctx.command.name in ['addstreamer', 'removestreamer', 'addstreamers', 'addlol', 'removelol']:
-                                                                                                     pass
                                                                                                 asyncio.create_task(delete_command_messages(ctx, response))
                                                                                                 else:
                                                                                                     logger.error(f"Erreur non gérée: {error}")
@@ -1240,20 +1144,16 @@ class TwitchAPI:
                                                                                                     @bot.event
                                                                                                     async def on_disconnect():
                                                                                                         if check_streams.is_running():
-                                                                                                             pass
                                                                                                         check_streams.cancel()
                                                                                                         if check_lol_games.is_running():
-                                                                                                             pass
                                                                                                         check_lol_games.cancel()
                                                                                                         await opgg_api.close_session()
 
 
                                                                                                         if __name__ == "__main__":
-                                                                                                             pass
                                                                                                         Thread(target=run_flask).start()
                                                                                                         token = os.getenv("DISCORD_BOT_TOKEN")
                                                                                                         if not token:
-                                                                                                             pass
                                                                                                         print("❌ Le token Discord est manquant !")
                                                                                                         else:
                                                                                                             try:
