@@ -4,29 +4,42 @@ import aiohttp
 import json
 import asyncio
 import os
-from datetime import datetime
+from datetime import datetime, UTC
 import logging
-
-# Configuration du logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# Configuration
-intents = discord.Intents.default()
-intents.message_content = True
-intents.guilds = True
-
-bot = commands.Bot(command_prefix='!', intents=intents)
-
-# Configuration Twitch API
-TWITCH_CLIENT_ID = "tejcc6qy12vbclkl2qige9szpfoher"
-TWITCH_CLIENT_SECRET = "18jywkay5xbbo5d2028f4fxwyf0txk"
-
-# Stockage des données (dans un vrai bot, utilisez une base de données)
-streamers = {}
-stream_messages = {}
-ping_roles = {}
-notification_channels = {}
+from threading import Thread
+from flask import Flask
+from bs4 import BeautifulSoup
+import re
+# === Flask (pour Render) ===
+app = Flask('')
+@app.route('/')
+def home():
+    return "Bot Discord actif."
+def run_flask():
+    app.run(host='0.0.0.0', port=8080)
+    # === Logger ===
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger(__name__)
+    # === Bot Discord ===
+    intents = discord.Intents.default()
+    intents.message_content = True
+    intents.guilds = True
+    intents.reactions = True
+    bot = commands.Bot(command_prefix='!', intents=intents)
+    bot.remove_command('help')  # Supprime la commande help par défaut pour ajouter la tienne
+    # === Twitch credentials ===
+    TWITCH_CLIENT_ID = "tejcc6qy12vbclkl2qige9szpfoher"
+    TWITCH_CLIENT_SECRET = "18jywkay5xbbo5d2028f4fxwyf0txk"
+    # === Stockage des données ===
+    streamers = {}
+    stream_messages = {}
+    ping_roles = {}
+    notification_channels = {}
+    reaction_role_messages = {}
+    # === Nouveaux dictionnaires pour OP.GG ===
+    lol_players = {}  # {channel_id: [list of players]}
+    lol_game_messages = {}  # {channel_id_playername: message_id}
+    lol_ping_roles = {}  # {channel_id: role_id}
 
 class TwitchAPI:
     def __init__(self):
@@ -35,7 +48,6 @@ class TwitchAPI:
         self.token_expires_at = None
 
     async def get_token(self):
-        """Obtient ou renouvelle le token Twitch"""
         url = "https://id.twitch.tv/oauth2/token"
         params = {
             'client_id': TWITCH_CLIENT_ID,
@@ -53,8 +65,7 @@ class TwitchAPI:
                             'Client-ID': TWITCH_CLIENT_ID,
                             'Authorization': f'Bearer {self.token}'
                         }
-                        # Le token expire généralement après 1 heure
-                        self.token_expires_at = datetime.utcnow().timestamp() + data.get('expires_in', 3600)
+                        self.token_expires_at = datetime.now(UTC).timestamp() + data.get('expires_in', 3600)
                         logger.info("Token Twitch obtenu avec succès")
                         return True
                     else:
@@ -65,56 +76,46 @@ class TwitchAPI:
             return False
 
     async def ensure_valid_token(self):
-        """S'assure que le token est valide"""
-        if not self.token or (self.token_expires_at and datetime.utcnow().timestamp() >= self.token_expires_at - 300):
+        if not self.token or (self.token_expires_at and datetime.now(UTC).timestamp() >= self.token_expires_at - 300):
             await self.get_token()
 
     async def get_streams(self, usernames):
-        """Obtient les informations des streams actifs"""
         if not usernames:
             return []
 
         await self.ensure_valid_token()
-        
         url = "https://api.twitch.tv/helix/streams"
-        
-        # L'API Twitch limite à 100 utilisateurs par requête
-        all_streams = []
-        for i in range(0, len(usernames), 100):
-            batch = usernames[i:i+100]
-            params = {'user_login': batch}
-
-            try:
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(url, headers=self.headers, params=params) as response:
-                        if response.status == 200:
-                            data = await response.json()
-                            all_streams.extend(data['data'])
-                        elif response.status == 401:  # Token invalide
-                            logger.warning("Token Twitch invalide, renouvellement...")
-                            await self.get_token()
-                            return await self.get_streams(usernames)
-                        else:
-                            logger.error(f"Erreur API Twitch streams: {response.status}")
-            except Exception as e:
-                logger.error(f"Exception lors de la récupération des streams: {e}")
-                
-        return all_streams
-
-    async def get_user_info(self, username):
-        """Obtient les informations d'un utilisateur Twitch"""
-        await self.ensure_valid_token()
-
-        url = "https://api.twitch.tv/helix/users"
-        params = {'login': username}
+        params = {'user_login': usernames}
 
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, headers=self.headers, params=params) as response:
                     if response.status == 200:
                         data = await response.json()
+                        return data['data']
+                    elif response.status == 401:
+                        logger.warning("Token Twitch invalide, renouvellement...")
+                        await self.get_token()
+                        return await self.get_streams(usernames)
+                    else:
+                        logger.error(f"Erreur API Twitch streams: {response.status}")
+                        return []
+        except Exception as e:
+            logger.error(f"Exception lors de la récupération des streams: {e}")
+            return []
+
+    async def get_user_info(self, username):
+        await self.ensure_valid_token()
+        url = "https://api.twitch.tv/helix/users"
+        params = {'login': username}
+        logger.info("get_user_info called")
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, headers=self.headers, params=params) as response:
+                    if response.status == 200:
+                        data = await response.json()
                         return data['data'][0] if data['data'] else None
-                    elif response.status == 401:  # Token invalide
+                    elif response.status == 401:
                         logger.warning("Token Twitch invalide, renouvellement...")
                         await self.get_token()
                         return await self.get_user_info(username)
@@ -124,442 +125,1144 @@ class TwitchAPI:
         except Exception as e:
             logger.error(f"Exception lors de la récupération de l'utilisateur: {e}")
             return None
+        def __init__(self):
+            self.token = None
+            self.headers = {}
+            self.token_expires_at = None
 
-    async def get_multiple_users_info(self, usernames):
-        """Obtient les informations de plusieurs utilisateurs Twitch"""
-        if not usernames:
-            return []
+    async def get_token(self):
+        url = "https://id.twitch.tv/oauth2/token"
+        params = {
+            'client_id': TWITCH_CLIENT_ID,
+            'client_secret': TWITCH_CLIENT_SECRET,
+            'grant_type': 'client_credentials'
+        }
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, params=params) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        self.token = data['access_token']
+                        self.headers = {
+                            'Client-ID': TWITCH_CLIENT_ID,
+                            'Authorization': f'Bearer {self.token}'
+                        }
+                        self.token_expires_at = datetime.now(timezone.utc).timestamp() + data.get('expires_in', 3600)
+                        print("Token OK :", self.token)
+                        return True
+                    else:
+                        print("Erreur:", response.status)
+                        return False
+        except Exception as e:
+            print("Exception:", e)
+            return False
+        async def ensure_valid_token(self):
+            if not self.token or (self.token_expires_at and datetime.now(UTC).timestamp() >= self.token_expires_at - 300):
+                 pass
+            await self.get_token()
 
-        await self.ensure_valid_token()
-        
-        url = "https://api.twitch.tv/helix/users"
-        all_users = []
-        
-        # L'API Twitch limite à 100 utilisateurs par requête
-        for i in range(0, len(usernames), 100):
-            batch = usernames[i:i+100]
-            params = {'login': batch}
+            async def get_streams(self, usernames):
+                if not usernames:
+                     pass
+                return []
+
+            await self.ensure_valid_token()
+            url = "https://api.twitch.tv/helix/streams"
+            params = {'user_login': usernames}
 
             try:
                 async with aiohttp.ClientSession() as session:
-                    async with session.get(url, headers=self.headers, params=params) as response:
-                        if response.status == 200:
-                            data = await response.json()
-                            all_users.extend(data['data'])
-                        elif response.status == 401:  # Token invalide
-                            logger.warning("Token Twitch invalide, renouvellement...")
-                            await self.get_token()
-                            return await self.get_multiple_users_info(usernames)
-                        else:
-                            logger.error(f"Erreur API Twitch users: {response.status}")
+                async with session.get(url, headers=self.headers, params=params) as response:
+                if response.status == 200:
+                     pass
+                data = await response.json()
+                return data['data']
+            elif response.status == 401:
+                 pass
+            logger.warning("Token Twitch invalide, renouvellement...")
+            await self.get_token()
+            return await self.get_streams(usernames)
+        else:
+            logger.error(f"Erreur API Twitch streams: {response.status}")
+            return []
+        except Exception as e:
+            logger.error(f"Exception lors de la récupération des streams: {e}")
+            return []
+
+    async def get_user_info(self, username):
+        await self.ensure_valid_token()
+        url = "https://api.twitch.tv/helix/users"
+        params = {'login': username}
+        logger.info("get_user_info called")
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, headers=self.headers, params=params) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        return data['data'][0] if data['data'] else None
+                    elif response.status == 401:
+                        logger.warning("Token Twitch invalide, renouvellement...")
+                        await self.get_token()
+                        return await self.get_user_info(username)
+                    else:
+                        logger.error(f"Erreur API Twitch user: {response.status}")
+                        return None
+        except Exception as e:
+            logger.error(f"Exception lors de la récupération de l'utilisateur: {e}")
+            return None
+        def __init__(self):
+            self.token = None
+            self.headers = {}
+            self.token_expires_at = None
+
+            def __init__(self):
+                self.token = None
+                self.headers = {}
+                self.token_expires_at = None
+    async def get_token(self):
+        url = "https://id.twitch.tv/oauth2/token"
+        params = {
+            'client_id': TWITCH_CLIENT_ID,
+            'client_secret': TWITCH_CLIENT_SECRET,
+            'grant_type': 'client_credentials'
+        }
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, params=params) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        self.token = data['access_token']
+                        self.headers = {
+                            'Client-ID': TWITCH_CLIENT_ID,
+                            'Authorization': f'Bearer {self.token}'
+                        }
+                        self.token_expires_at = datetime.now(timezone.utc).timestamp() + data.get('expires_in', 3600)
+                        print("Token OK :", self.token)
+                        return True
+                    else:
+                        print("Erreur:", response.status)
+                        return False
+        except Exception as e:
+            print("Exception:", e)
+            return False
+            async def ensure_valid_token(self):
+                if not self.token or (self.token_expires_at and datetime.now(UTC).timestamp() >= self.token_expires_at - 300):
+                     pass
+                await self.get_token()
+                async def get_streams(self, usernames):
+                    if not usernames:
+                         pass
+                    return []
+                await self.ensure_valid_token()
+                url = "https://api.twitch.tv/helix/streams"
+                params = {'user_login': usernames}
+                async with aiohttp.ClientSession() as session:
+                async with session.get(url, headers=self.headers, params=params) as response:
+                if response.status == 200:
+                     pass
+                data = await response.json()
+                return data['data']
+            elif response.status == 401:
+                 pass
+            logger.warning("Token Twitch invalide, renouvellement...")
+            await self.get_token()
+            return await self.get_streams(usernames)
+        else:
+            logger.error(f"Erreur API Twitch streams: {response.status}")
+            return []
+        except Exception as e:
+            logger.error(f"Exception lors de la récupération des streams: {e}")
+            return []
+    async def get_user_info(self, username):
+        await self.ensure_valid_token()
+        url = "https://api.twitch.tv/helix/users"
+        params = {'login': username}
+        logger.info("get_user_info called")
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, headers=self.headers, params=params) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        return data['data'][0] if data['data'] else None
+                    elif response.status == 401:
+                        logger.warning("Token Twitch invalide, renouvellement...")
+                        await self.get_token()
+                        return await self.get_user_info(username)
+                    else:
+                        logger.error(f"Erreur API Twitch user: {response.status}")
+                        return None
+        except Exception as e:
+            logger.error(f"Exception lors de la récupération de l'utilisateur: {e}")
+            return None
+    class OpGGAPI:
+        def __init__(self):
+            self.session = None
+            self.headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+        async def get_session(self):
+            if not self.session:
+                 pass
+            self.session = aiohttp.ClientSession(headers=self.headers)
+            return self.session
+        async def close_session(self):
+            if self.session:
+                 pass
+            await self.session.close()
+            self.session = None
+            async def check_player_ingame(self, summoner_name, region='euw'):
+                """Vérifie si un joueur est en game sur op.gg"""
+                try:
+                    session = await self.get_session()
+                    # Nettoyer le nom du joueur
+                    clean_name = summoner_name.replace(' ', '%20')
+                    url = f"https://op.gg/summoners/{region}/{clean_name}"
+
+                    async with session.get(url) as response:
+                    if response.status == 200:
+                         pass
+                    html = await response.text()
+                    soup = BeautifulSoup(html, 'html.parser')
+
+                    # Chercher les indicateurs de partie en cours
+                    # Op.gg affiche "Live Game" ou "En direct" quand quelqu'un est en game
+                    live_indicators = [
+                    'Live Game',
+                    'En direct',
+                    'live-game',
+                    'spectate',
+                    'In Game'
+                    ]
+
+                    for indicator in live_indicators:
+                    if indicator.lower() in html.lower():
+                         pass
+                    # Extraire plus d'informations sur la partie
+                    game_info = await self.extract_game_info(html, summoner_name)
+                    return game_info
+
+                return None
+            else:
+                logger.warning(f"Erreur {response.status} pour {summoner_name}")
+                return None
+
             except Exception as e:
-                logger.error(f"Exception lors de la récupération des utilisateurs: {e}")
-                
-        return all_users
+                logger.error(f"Erreur lors de la vérification de {summoner_name}: {e}")
+                return None
+            async def extract_game_info(self, html, summoner_name):
+                """Extrait les informations de la partie en cours"""
+                try:
+                    soup = BeautifulSoup(html, 'html.parser')
 
-twitch_api = TwitchAPI()
+                    game_info = {
+                    'player': summoner_name,
+                    'is_live': True,
+                    'game_mode': 'Partie classée',  # Par défaut
+                    'champion': 'Inconnu',
+                    'rank': 'Inconnu',
+                    'spectate_url': f"https://op.gg/summoners/euw/{summoner_name.replace(' ', '%20')}"
+                }
 
-@bot.event
-async def on_ready():
-    print(f'{bot.user} est connecté et prêt !')
-    await twitch_api.get_token()
-    if not check_streams.is_running():
-        check_streams.start()
+                # Essayer d'extraire le champion joué
+                champion_img = soup.find('img', {'class': re.compile(r'champion|Champion')})
+                if champion_img and champion_img.get('alt'):
+                     pass
+                game_info['champion'] = champion_img['alt']
 
-@tasks.loop(minutes=2)
-async def check_streams():
-    """Vérifie les streams actifs toutes les 2 minutes"""
-    try:
-        for channel_id, streamer_list in streamers.items():
-            if not streamer_list:
+                # Essayer d'extraire le rang
+                rank_element = soup.find('div', {'class': re.compile(r'tier|Tier|rank|Rank')})
+                if rank_element:
+                     pass
+                game_info['rank'] = rank_element.get_text(strip=True)
+
+                return game_info
+
+            except Exception as e:
+                logger.error(f"Erreur lors de l'extraction des infos de partie: {e}")
+                return {
+            'player': summoner_name,
+            'is_live': True,
+            'game_mode': 'Partie en cours',
+            'champion': 'Inconnu',
+            'rank': 'Inconnu',
+            'spectate_url': f"https://op.gg/summoners/euw/{summoner_name.replace(' ', '%20')}"
+        }
+        async def validate_summoner(self, summoner_name, region='euw'):
+            """Valide qu'un nom d'invocateur existe"""
+            try:
+                session = await self.get_session()
+                clean_name = summoner_name.replace(' ', '%20')
+                url = f"https://op.gg/summoners/{region}/{clean_name}"
+
+                async with session.get(url) as response:
+                if response.status == 200:
+                     pass
+                html = await response.text()
+                # Vérifier si la page contient des informations de joueur
+                if 'summoner not found' not in html.lower() and 'niveau' in html.lower():
+                     pass
+                return True
+            return False
+        except Exception as e:
+            logger.error(f"Erreur lors de la validation de {summoner_name}: {e}")
+            return False
+        twitch_api = TwitchAPI()
+        opgg_api = OpGGAPI()
+        async def on_ready():
+            print(f'{bot.user} est connecté et prêt !')
+            await twitch_api.get_token()
+            if not check_streams.is_running():
+                 pass
+            check_streams.start()
+            if not check_lol_games.is_running():
+                 pass
+            check_lol_games.start()
+            @tasks.loop(minutes=1)
+            async def check_streams():
+                for channel_id, streamer_list in streamers.items():
+                if not streamer_list:
+                     pass
                 continue
-
             channel = bot.get_channel(channel_id)
             if not channel:
-                logger.warning(f"Channel {channel_id} non trouvé")
-                continue
+                 pass
+            logger.warning(f"Channel {channel_id} non trouvé")
+            continue
+        streams = await twitch_api.get_streams(streamer_list)
+        currently_live = {stream['user_login'].lower() for stream in streams}
+        for stream in streams:
+             pass
+        username = stream['user_login'].lower()
+        message_key = f"{channel_id}_{username}"
+        if message_key not in stream_messages:
+             pass
+        await send_stream_notification(channel, stream)
+        to_remove = []
+        for message_key, message_id in stream_messages.items():
+        if message_key.startswith(f"{channel_id}_"):
+             pass
+        username = message_key.split('_', 1)[1]
+        if username not in currently_live:
+        try:
+            message = await channel.fetch_message(message_id)
+            await message.delete()
+            to_remove.append(message_key)
+            except discord.NotFound:
+                to_remove.append(message_key)
+                except discord.Forbidden:
+                    logger.warning(f"Pas de permission pour supprimer le message de {username}")
+                    to_remove.append(message_key)
+                    except Exception as e:
+                        logger.error(f"Erreur lors de la suppression du message: {e}")
+                        to_remove.append(message_key)
+                        for message_key in to_remove:
+                             pass
+                        stream_messages.pop(message_key, None)
+                        logger.error(f"Erreur dans check_streams: {e}")
+                        @tasks.loop(minutes=2)  # Vérifier toutes les 2 minutes pour éviter de spam op.gg
+                        async def check_lol_games():
+                            """Vérifie les parties LoL en cours"""
+                            for channel_id, player_list in lol_players.items():
+                            if not player_list:
+                                 pass
+                            continue
+                        channel = bot.get_channel(channel_id)
+                        if not channel:
+                             pass
+                        logger.warning(f"Channel {channel_id} non trouvé")
+                        continue
+                    currently_ingame = set()
+                    for player in player_list:
+                         pass
+                    game_info = await opgg_api.check_player_ingame(player)
+                    if game_info:
+                         pass
+                    currently_ingame.add(player.lower())
+                    message_key = f"{channel_id}_{player.lower()}"
 
-            streams = await twitch_api.get_streams(streamer_list)
-            currently_live = {stream['user_login'].lower() for stream in streams}
-
-            # Envoyer des notifications pour les nouveaux streams
-            for stream in streams:
-                username = stream['user_login'].lower()
-                message_key = f"{channel_id}_{username}"
-                
-                if message_key not in stream_messages:
-                    await send_stream_notification(channel, stream)
-
-            # Supprimer les messages des streams terminés
-            to_remove = []
-            for message_key, message_id in stream_messages.items():
-                if message_key.startswith(f"{channel_id}_"):
-                    username = message_key.split('_', 1)[1]
-                    if username not in currently_live:
-                        try:
-                            message = await channel.fetch_message(message_id)
-                            await message.delete()
-                            to_remove.append(message_key)
+                    if message_key not in lol_game_messages:
+                         pass
+                    await send_lol_game_notification(channel, game_info)
+                    # Supprimer les messages des parties terminées
+                    to_remove = []
+                    for message_key, message_id in lol_game_messages.items():
+                    if message_key.startswith(f"{channel_id}_"):
+                         pass
+                    player = message_key.split('_', 1)[1]
+                    if player not in currently_ingame:
+                    try:
+                        message = await channel.fetch_message(message_id)
+                        await message.delete()
+                        to_remove.append(message_key)
                         except discord.NotFound:
                             to_remove.append(message_key)
-                        except discord.Forbidden:
-                            logger.warning(f"Pas de permission pour supprimer le message de {username}")
-                            to_remove.append(message_key)
-                        except Exception as e:
-                            logger.error(f"Erreur lors de la suppression du message: {e}")
-                            to_remove.append(message_key)
+                            except discord.Forbidden:
+                                logger.warning(f"Pas de permission pour supprimer le message de {player}")
+                                to_remove.append(message_key)
+                                except Exception as e:
+                                    logger.error(f"Erreur lors de la suppression du message: {e}")
+                                    to_remove.append(message_key)
+                                    for message_key in to_remove:
+                                         pass
+                                    lol_game_messages.pop(message_key, None)
+                                    except Exception as e:
+                                        logger.error(f"Erreur dans check_lol_games: {e}")
+                                        @check_streams.before_loop
+                                        async def before_check_streams():
+                                            await bot.wait_until_ready()
+                                            @check_lol_games.before_loop
+                                            async def before_check_lol_games():
+                                                await bot.wait_until_ready()
+                                                async def send_stream_notification(channel, stream):
+                                                    try:
+                                                        username = stream['user_login']
+                                                        game_name = stream['game_name'] or "Pas de catégorie"
+                                                        viewer_count = stream['viewer_count']
+                                                        title = stream['title'] or "Pas de titre"
+                                                        embed = discord.Embed(
+                                                        title=f"🔴 {stream['user_name']} est en live !",
+                                                        description=f"**{title}**",
+                                                        color=0x9146ff,
+                                                        url=f"https://twitch.tv/{username}"
+                                                        )
+                                                        embed.add_field(name="🎮 Catégorie", value=game_name, inline=True)
+                                                        embed.add_field(name="👥 Viewers", value=f"{viewer_count:,}", inline=True)
+                                                        embed.add_field(name="🔗 Lien", value=f"[Regarder le stream](https://twitch.tv/{username})", inline=False)
+                                                        if stream.get('thumbnail_url'):
+                                                             pass
+                                                        thumbnail = stream['thumbnail_url'].replace('{width}', '320').replace('{height}', '180')
+                                                        embed.set_image(url=thumbnail)
+                                                        embed.timestamp = datetime.now(UTC)
+                                                        content = ""
+                                                        if channel.id in ping_roles:
+                                                             pass
+                                                        role = channel.guild.get_role(ping_roles[channel.id])
+                                                        if role:
+                                                             pass
+                                                        content = f"{role.mention} "
+                                                        message = await channel.send(content=content, embed=embed)
+                                                        message_key = f"{channel.id}_{username.lower()}"
+                                                        stream_messages[message_key] = message.id
+                                                        logger.info(f"Notification envoyée pour {username} dans {channel.name}")
+                                                        logger.error(f"Pas de permission pour envoyer un message dans {channel.name}")
+                                                        except Exception as e:
+                                                            logger.error(f"Erreur lors de l'envoi de la notification: {e}")
+                                                            async def send_lol_game_notification(channel, game_info):
+                                                                """Envoie une notification pour une partie LoL"""
+                                                                try:
+                                                                    player = game_info['player']
+                                                                    champion = game_info['champion']
+                                                                    rank = game_info['rank']
+                                                                    spectate_url = game_info['spectate_url']
+                                                                    embed = discord.Embed(
+                                                                    title=f"🎮 {player} est en partie !",
+                                                                    description=f"**{champion}** • {rank}",
+                                                                    color=0x0f2027,
+                                                                    url=spectate_url
+                                                                    )
+                                                                    embed.add_field(name="🏆 Champion", value=champion, inline=True)
+                                                                    embed.add_field(name="📊 Rang", value=rank, inline=True)
+                                                                    embed.add_field(name="👁️ Spectate", value=f"[Regarder la partie]({spectate_url})", inline=False)
+                                                                    embed.timestamp = datetime.now(UTC)
+                                                                    embed.set_footer(text="League of Legends • OP.GG")
+                                                                    content = ""
+                                                                    if channel.id in lol_ping_roles:
+                                                                         pass
+                                                                    role = channel.guild.get_role(lol_ping_roles[channel.id])
+                                                                    if role:
+                                                                         pass
+                                                                    content = f"{role.mention} "
+                                                                    message = await channel.send(content=content, embed=embed)
+                                                                    # Ajouter une réaction pour accès rapide
+                                                                    await message.add_reaction("👁️")
+                                                                    message_key = f"{channel.id}_{player.lower()}"
+                                                                    lol_game_messages[message_key] = message.id
+                                                                    logger.info(f"Notification LoL envoyée pour {player} dans {channel.name}")
+                                                                    except discord.Forbidden:
+                                                                        logger.error(f"Pas de permission pour envoyer un message dans {channel.name}")
+                                                                        except Exception as e:
+                                                                            logger.error(f"Erreur lors de l'envoi de la notification LoL: {e}")
+                                                                            async def delete_command_messages(ctx, response_message=None):
+                                                                                """Supprime le message de commande et la réponse du bot après un délai"""
+                                                                                try:
+                                                                                    await asyncio.sleep(5)
+                                                                                    if ctx.message:
+                                                                                         pass
+                                                                                    await ctx.message.delete()
+                                                                                    if response_message:
+                                                                                         pass
+                                                                                    await response_message.delete()
+                                                                                    except discord.NotFound:
+                                                                                        except discord.Forbidden:
+                                                                                            pass
+                                                                                        # === Commandes LoL ===
+                                                                                        try:
+                                                                                             pass
 
-            for message_key in to_remove:
-                stream_messages.pop(message_key, None)
 
-    except Exception as e:
-        logger.error(f"Erreur dans check_streams: {e}")
 
-@check_streams.before_loop
-async def before_check_streams():
-    """Attend que le bot soit prêt avant de commencer la vérification"""
-    await bot.wait_until_ready()
 
-async def send_stream_notification(channel, stream):
-    """Envoie une notification de stream"""
-    try:
-        username = stream['user_login']
-        game_name = stream['game_name'] or "Pas de catégorie"
-        viewer_count = stream['viewer_count']
-        title = stream['title'] or "Pas de titre"
 
-        embed = discord.Embed(
-            title=f"🔴 {stream['user_name']} est en live !",
-            description=f"**{title}**",
-            color=0x9146ff,
-            url=f"https://twitch.tv/{username}"
-        )
+                                                                                            # === Commandes Twitch existantes ===
 
-        embed.add_field(name="🎮 Catégorie", value=game_name, inline=True)
-        embed.add_field(name="👥 Viewers", value=f"{viewer_count:,}", inline=True)
-        embed.add_field(name="🔗 Lien", value=f"[Regarder le stream](https://twitch.tv/{username})", inline=False)
 
-        if stream.get('thumbnail_url'):
-            thumbnail = stream['thumbnail_url'].replace('{width}', '320').replace('{height}', '180')
-            embed.set_image(url=thumbnail)
 
-        embed.timestamp = datetime.utcnow()
 
-        content = ""
-        if channel.id in ping_roles:
-            role = channel.guild.get_role(ping_roles[channel.id])
-            if role:
-                content = f"{role.mention} "
 
-        message = await channel.send(content=content, embed=embed)
-        message_key = f"{channel.id}_{username.lower()}"
-        stream_messages[message_key] = message.id
-        
-        logger.info(f"Notification envoyée pour {username} dans {channel.name}")
 
-    except discord.Forbidden:
-        logger.error(f"Pas de permission pour envoyer un message dans {channel.name}")
-    except Exception as e:
-        logger.error(f"Erreur lors de l'envoi de la notification: {e}")
 
-def parse_usernames(text):
-    """Parse une liste d'utilisateurs à partir d'un texte"""
-    if not text:
-        return []
-    
-    # Supprimer les @ et nettoyer
-    usernames = []
-    for username in text.replace(',', ' ').split():
-        username = username.lower().replace('@', '').strip()
-        if username and username not in usernames:  # Éviter les doublons
-            usernames.append(username)
-    
-    return usernames
 
-@bot.command(name='addstreamer')
-@commands.has_permissions(manage_channels=True)
-async def add_streamer(ctx, *, usernames=None):
-    """Ajoute un ou plusieurs streamers à surveiller
-    Usage: !addstreamer username1 username2 @username3
-    ou: !addstreamer username1, username2, username3"""
-    
-    if usernames is None:
-        await ctx.send("❌ Veuillez spécifier un ou plusieurs noms d'utilisateurs Twitch !\n"
-                      "Exemple: `!addstreamer streamer1 streamer2` ou `!addstreamer streamer1, streamer2`")
-        return
 
-    channel_id = ctx.channel.id
-    usernames_list = parse_usernames(usernames)
-    
-    if not usernames_list:
-        await ctx.send("❌ Aucun nom d'utilisateur valide trouvé !")
-        return
 
-    if channel_id not in streamers:
-        streamers[channel_id] = []
 
-    # Vérifier quels utilisateurs sont déjà dans la liste
-    already_added = [username for username in usernames_list if username in streamers[channel_id]]
-    new_usernames = [username for username in usernames_list if username not in streamers[channel_id]]
-    
-    if not new_usernames:
-        usernames_str = ", ".join(already_added)
-        await ctx.send(f"❌ Tous les streamers sont déjà dans la liste : {usernames_str}")
-        return
 
-    # Envoyer un message de vérification
-    checking_msg = await ctx.send(f"🔍 Vérification de {len(new_usernames)} streamer(s)...")
 
-    # Vérifier si les utilisateurs existent sur Twitch
-    users_info = await twitch_api.get_multiple_users_info(new_usernames)
-    found_usernames = [user['login'].lower() for user in users_info]
-    not_found = [username for username in new_usernames if username not in found_usernames]
 
-    # Ajouter les utilisateurs trouvés
-    added_streamers = []
-    for username in new_usernames:
-        if username in found_usernames:
-            streamers[channel_id].append(username)
-            added_streamers.append(username)
 
-    # Mettre à jour le message avec les résultats
-    result_message = ""
-    
-    if added_streamers:
-        result_message += f"✅ **{len(added_streamers)} streamer(s) ajouté(s) :**\n"
-        result_message += "• " + "\n• ".join(added_streamers) + "\n\n"
-    
-    if already_added:
-        result_message += f"ℹ️ **{len(already_added)} streamer(s) déjà dans la liste :**\n"
-        result_message += "• " + "\n• ".join(already_added) + "\n\n"
-    
-    if not_found:
-        result_message += f"❌ **{len(not_found)} streamer(s) non trouvé(s) sur Twitch :**\n"
-        result_message += "• " + "\n• ".join(not_found)
 
-    await checking_msg.edit(content=result_message)
 
-@bot.command(name='removestreamer')
-@commands.has_permissions(manage_channels=True)
-async def remove_streamer(ctx, *, usernames=None):
-    """Retire un ou plusieurs streamers de la surveillance
-    Usage: !removestreamer username1 username2 @username3
-    ou: !removestreamer username1, username2, username3"""
-    
-    if usernames is None:
-        await ctx.send("❌ Veuillez spécifier un ou plusieurs noms d'utilisateurs Twitch !\n"
-                      "Exemple: `!removestreamer streamer1 streamer2`")
-        return
 
-    channel_id = ctx.channel.id
-    usernames_list = parse_usernames(usernames)
 
-    if not usernames_list:
-        await ctx.send("❌ Aucun nom d'utilisateur valide trouvé !")
-        return
 
-    if channel_id not in streamers or not streamers[channel_id]:
-        await ctx.send("❌ Aucun streamer n'est surveillé dans ce channel !")
-        return
 
-    # Séparer les streamers trouvés et non trouvés
-    found_streamers = [username for username in usernames_list if username in streamers[channel_id]]
-    not_found_streamers = [username for username in usernames_list if username not in streamers[channel_id]]
 
-    # Supprimer les streamers trouvés
-    for username in found_streamers:
-        streamers[channel_id].remove(username)
+                                                                                            try:
+                                                                                                 pass
 
-        # Supprimer le message de notification s'il existe
-        message_key = f"{channel_id}_{username}"
-        if message_key in stream_messages:
-            try:
-                message = await ctx.channel.fetch_message(stream_messages[message_key])
-                await message.delete()
-            except:
-                pass
-            finally:
-                stream_messages.pop(message_key, None)
 
-    # Construire le message de résultat
-    result_message = ""
-    
-    if found_streamers:
-        result_message += f"✅ **{len(found_streamers)} streamer(s) retiré(s) :**\n"
-        result_message += "• " + "\n• ".join(found_streamers)
-    
-    if not_found_streamers:
-        if result_message:
-            result_message += "\n\n"
-        result_message += f"❌ **{len(not_found_streamers)} streamer(s) non trouvé(s) dans la liste :**\n"
-        result_message += "• " + "\n• ".join(not_found_streamers)
 
-    await ctx.send(result_message)
 
-@bot.command(name='liststreamer')
-async def list_streamers(ctx):
-    """Affiche la liste des streamers surveillés"""
-    channel_id = ctx.channel.id
 
-    if channel_id not in streamers or not streamers[channel_id]:
-        await ctx.send("📋 Aucun streamer surveillé dans ce channel !")
-        return
 
-    # Diviser la liste si elle est trop longue
-    streamer_list = streamers[channel_id]
-    total = len(streamer_list)
-    
-    embed = discord.Embed(
-        title=f"📋 Streamers surveillés ({total})",
-        color=0x9146ff
-    )
-    
-    # Limiter à 25 champs (limite Discord)
-    if total <= 25:
-        description = "\n".join(f"• {streamer}" for streamer in streamer_list)
-        embed.description = description
-    else:
-        # Diviser en plusieurs embeds si nécessaire
-        for i in range(0, min(25, total)):
-            embed.add_field(
-                name=f"Streamer {i+1}",
-                value=streamer_list[i],
-                inline=True
-            )
-        
-        if total > 25:
-            embed.set_footer(text=f"Affichage de 25 sur {total} streamers. Utilisez une base de données pour de grandes listes.")
 
-    await ctx.send(embed=embed)
 
-@bot.command(name='clearstreamers')
-@commands.has_permissions(administrator=True)
-async def clear_streamers(ctx):
-    """Supprime tous les streamers surveillés (Admin seulement)"""
-    channel_id = ctx.channel.id
-    
-    if channel_id not in streamers or not streamers[channel_id]:
-        await ctx.send("📋 Aucun streamer à supprimer dans ce channel !")
-        return
-    
-    count = len(streamers[channel_id])
-    
-    # Demander confirmation
-    confirm_msg = await ctx.send(f"⚠️ Êtes-vous sûr de vouloir supprimer **{count} streamer(s)** ?\n"
-                                f"Réagissez avec ✅ pour confirmer ou ❌ pour annuler.")
-    
-    await confirm_msg.add_reaction('✅')
-    await confirm_msg.add_reaction('❌')
-    
-    def check(reaction, user):
-        return user == ctx.author and str(reaction.emoji) in ['✅', '❌'] and reaction.message.id == confirm_msg.id
-    
-    try:
-        reaction, user = await bot.wait_for('reaction_add', timeout=30.0, check=check)
-        
-        if str(reaction.emoji) == '✅':
-            # Supprimer tous les messages de notification
-            for username in streamers[channel_id]:
-                message_key = f"{channel_id}_{username}"
-                if message_key in stream_messages:
-                    try:
-                        message = await ctx.channel.fetch_message(stream_messages[message_key])
-                        await message.delete()
-                    except:
-                        pass
-                    finally:
-                        stream_messages.pop(message_key, None)
-            
-            streamers[channel_id] = []
-            await confirm_msg.edit(content=f"✅ **{count} streamer(s) supprimé(s)** avec succès !")
-        else:
-            await confirm_msg.edit(content="❌ Suppression annulée.")
-            
-    except asyncio.TimeoutError:
-        await confirm_msg.edit(content="⏱️ Temps dépassé. Suppression annulée.")
 
-@bot.command(name='pingrole')
-@commands.has_permissions(manage_roles=True)
-async def set_ping_role(ctx, role: discord.Role = None):
-    """Définit le rôle à ping lors des notifications"""
-    channel_id = ctx.channel.id
 
-    if role is None:
-        if channel_id in ping_roles:
-            del ping_roles[channel_id]
-        await ctx.send("✅ Rôle de ping désactivé pour ce channel !")
-        return
+                                                                                                try:
+                                                                                                    pass
 
-    ping_roles[channel_id] = role.id
-    await ctx.send(f"✅ Le rôle {role.mention} sera ping lors des notifications de stream !")
 
-@bot.command(name='streamhelp')
-async def stream_help(ctx):
-    """Affiche l'aide du bot"""
-    embed = discord.Embed(
-        title="🤖 Aide du Bot Twitch",
-        description="Commandes disponibles :",
-        color=0x9146ff
-    )
 
-    embed.add_field(name="!addstreamer <usernames>", 
-                   value="Ajouter un ou plusieurs streamers\n*Ex: `!addstreamer ninja tfue` ou `!addstreamer ninja, tfue`*", 
-                   inline=False)
-    embed.add_field(name="!removestreamer <usernames>", 
-                   value="Retirer un ou plusieurs streamers\n*Ex: `!removestreamer ninja tfue`*", 
-                   inline=False)
-    embed.add_field(name="!liststreamer", value="Afficher la liste des streamers surveillés", inline=False)
-    embed.add_field(name="!clearstreamers", value="Supprimer tous les streamers (Admin uniquement)", inline=False)
-    embed.add_field(name="!pingrole [@role]", value="Définir le rôle à ping (sans rôle = désactiver)", inline=False)
-    
-    embed.add_field(
-        name="ℹ️ Informations",
-        value="• Les streams sont vérifiés toutes les 2 minutes\n"
-              "• Les messages sont supprimés quand le stream s'arrête\n"
-              "• Vous pouvez ajouter plusieurs streamers en une fois\n"
-              "• Seuls les modérateurs peuvent gérer les streamers",
-        inline=False
-    )
 
-    await ctx.send(embed=embed)
 
-@bot.event
-async def on_command_error(ctx, error):
-    """Gère les erreurs de commandes"""
-    if isinstance(error, commands.MissingPermissions):
-        await ctx.send("❌ Vous n'avez pas les permissions nécessaires pour cette commande !")
-    elif isinstance(error, commands.BadArgument):
-        await ctx.send("❌ Argument invalide ! Utilisez `!streamhelp` pour voir les commandes.")
-    elif isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send("❌ Argument manquant ! Utilisez `!streamhelp` pour voir les commandes.")
-    else:
-        logger.error(f"Erreur non gérée: {error}")
 
-# Gestionnaire d'arrêt propre
-@bot.event
-async def on_disconnect():
-    """Arrête les tâches en cas de déconnexion"""
-    if check_streams.is_running():
-        check_streams.cancel()
 
-# Lancer le bot
-if __name__ == "__main__":
-    token = os.getenv("DISCORD_BOT_TOKEN")
-    if not token:
-        print("❌ Le token Discord est manquant ! Définis la variable d'environnement DISCORD_BOT_TOKEN.")
-        print("💡 Solutions possibles :")
-        print("1. Créer un fichier .env avec : DISCORD_BOT_TOKEN=votre_token")
-        print("2. Définir la variable d'environnement : set DISCORD_BOT_TOKEN=votre_token")
-        print("3. Ou modifier le code pour utiliser directement le token")
-    else:
-        try:
-            print(f"🚀 Tentative de connexion avec le token: {token[:10]}...")
-            bot.run(token)
-        except discord.errors.LoginFailure:
-            print("❌ Token Discord invalide ! Vérifiez votre token.")
-            print("💡 Pour obtenir un token valide :")
-            print("1. Allez sur https://discord.com/developers/applications")
-            print("2. Créez une nouvelle application")
-            print("3. Allez dans Bot > Token > Reset Token")
-        except Exception as e:
-            logger.error(f"Erreur lors du lancement du bot: {e}")
+
+
+
+                                                                                                try:
+                                                                                                    except Exception as e:
+                                                                                                         pass
+
+
+
+
+
+
+
+
+                                                                                                        try:
+                                                                                                            except discord.Forbidden:
+                                                                                                                except Exception as e:
+                                                                                                                     pass
+
+
+
+
+
+                                                                                                                    @bot.event
+
+                                                                                                                    # === Lancement ===
+
+                                                                                                                    # === Commandes ===
+                                                                                                                    @bot.command(name='addlol')
+                                                                                                                    @commands.has_permissions(manage_channels=True)
+                                                                                                                    async def add_lol_player(ctx, summoner_name=None, region='euw'):
+                                                                                                                        """Ajoute un joueur LoL à surveiller"""
+                                                                                                                        if summoner_name is None:
+                                                                                                                             pass
+                                                                                                                        response = await ctx.send("❌ Veuillez spécifier un nom d'invocateur !\nExemple: `!addlol Faker`")
+                                                                                                                        asyncio.create_task(delete_command_messages(ctx, response))
+                                                                                                                        return
+
+                                                                                                                    channel_id = ctx.channel.id
+                                                                                                                    summoner_name = summoner_name.strip()
+
+                                                                                                                    if not summoner_name:
+                                                                                                                         pass
+                                                                                                                    response = await ctx.send("❌ Nom d'invocateur invalide !")
+                                                                                                                    asyncio.create_task(delete_command_messages(ctx, response))
+                                                                                                                    return
+
+                                                                                                                if channel_id not in lol_players:
+                                                                                                                     pass
+                                                                                                                lol_players[channel_id] = []
+
+                                                                                                                if summoner_name.lower() in [p.lower() for p in lol_players[channel_id]]:
+                                                                                                                     pass
+                                                                                                                response = await ctx.send(f"❌ {summoner_name} est déjà dans la liste !")
+                                                                                                                asyncio.create_task(delete_command_messages(ctx, response))
+                                                                                                                return
+
+                                                                                                            # Valider que le joueur existe
+                                                                                                            if not await opgg_api.validate_summoner(summoner_name, region):
+                                                                                                                 pass
+                                                                                                            response = await ctx.send(f"❌ Le joueur {summoner_name} n'existe pas sur {region.upper()} !")
+                                                                                                            asyncio.create_task(delete_command_messages(ctx, response))
+                                                                                                            return
+
+                                                                                                        lol_players[channel_id].append(summoner_name)
+                                                                                                        response = await ctx.send(f"✅ {summoner_name} ajouté à la liste des joueurs LoL surveillés !")
+                                                                                                        asyncio.create_task(delete_command_messages(ctx, response))
+
+
+                                                                                                        @bot.command(name='removelol')
+                                                                                                        @commands.has_permissions(manage_channels=True)
+                                                                                                        async def remove_lol_player(ctx, summoner_name=None):
+                                                                                                            """Retire un joueur LoL de la surveillance"""
+                                                                                                            if summoner_name is None:
+                                                                                                                 pass
+                                                                                                            response = await ctx.send("❌ Veuillez spécifier un nom d'invocateur !")
+                                                                                                            asyncio.create_task(delete_command_messages(ctx, response))
+                                                                                                            return
+
+                                                                                                        channel_id = ctx.channel.id
+                                                                                                        summoner_name = summoner_name.strip()
+
+                                                                                                        if channel_id not in lol_players:
+                                                                                                             pass
+                                                                                                        response = await ctx.send("❌ Aucun joueur LoL surveillé dans ce channel !")
+                                                                                                        asyncio.create_task(delete_command_messages(ctx, response))
+                                                                                                        return
+
+                                                                                                    # Chercher le joueur (insensible à la casse)
+                                                                                                    player_to_remove = None
+                                                                                                    for player in lol_players[channel_id]:
+                                                                                                    if player.lower() == summoner_name.lower():
+                                                                                                         pass
+                                                                                                    player_to_remove = player
+                                                                                                    break
+
+                                                                                                if not player_to_remove:
+                                                                                                     pass
+                                                                                                response = await ctx.send(f"❌ {summoner_name} n'est pas dans la liste !")
+                                                                                                asyncio.create_task(delete_command_messages(ctx, response))
+                                                                                                return
+
+                                                                                            lol_players[channel_id].remove(player_to_remove)
+
+                                                                                            # Supprimer le message de notification s'il existe
+                                                                                            message_key = f"{channel_id}_{summoner_name.lower()}"
+                                                                                            if message_key in lol_game_messages:
+                                                                                            try:
+                                                                                                message = await ctx.channel.fetch_message(lol_game_messages[message_key])
+                                                                                                await message.delete()
+                                                                                                except:
+                                                                                                    pass
+                                                                                                finally:
+                                                                                                    lol_game_messages.pop(message_key, None)
+
+                                                                                                    response = await ctx.send(f"✅ {player_to_remove} retiré de la liste des joueurs LoL surveillés !")
+                                                                                                    asyncio.create_task(delete_command_messages(ctx, response))
+
+
+                                                                                                    @bot.command(name='listlol')
+                                                                                                    async def list_lol_players(ctx):
+                                                                                                        """Affiche la liste des joueurs LoL surveillés"""
+                                                                                                        channel_id = ctx.channel.id
+
+                                                                                                        if channel_id not in lol_players or not lol_players[channel_id]:
+                                                                                                             pass
+                                                                                                        await ctx.send("📋 Aucun joueur LoL surveillé dans ce channel !")
+                                                                                                        return
+
+                                                                                                    embed = discord.Embed(
+                                                                                                    title="📋 Joueurs LoL surveillés",
+                                                                                                    description="\n".join(f"• {player}" for player in lol_players[channel_id]),
+                                                                                                    color=0x0f2027
+                                                                                                    )
+                                                                                                    embed.set_footer(text="League of Legends • OP.GG")
+                                                                                                    await ctx.send(embed=embed)
+
+
+                                                                                                    @bot.command(name='lolping')
+                                                                                                    @commands.has_permissions(manage_roles=True)
+                                                                                                    async def set_lol_ping_role(ctx, role: discord.Role = None):
+                                                                                                        """Définit le rôle à ping pour les notifications LoL"""
+                                                                                                        channel_id = ctx.channel.id
+
+                                                                                                        if role is None:
+                                                                                                        if channel_id in lol_ping_roles:
+                                                                                                             pass
+                                                                                                        del lol_ping_roles[channel_id]
+                                                                                                        await ctx.send("✅ Rôle de ping LoL désactivé pour ce channel !")
+                                                                                                        return
+
+                                                                                                    lol_ping_roles[channel_id] = role.id
+                                                                                                    await ctx.send(f"✅ Le rôle {role.mention} sera ping lors des notifications LoL !")
+
+
+                                                                                                    @bot.command(name='addstreamer')
+                                                                                                    @commands.has_permissions(manage_channels=True)
+                                                                                                    async def add_streamer(ctx, username=None):
+                                                                                                        if username is None:
+                                                                                                             pass
+                                                                                                        response = await ctx.send("❌ Veuillez spécifier un nom d'utilisateur Twitch !")
+                                                                                                        asyncio.create_task(delete_command_messages(ctx, response))
+                                                                                                        return
+
+                                                                                                    channel_id = ctx.channel.id
+                                                                                                    username = username.lower().replace('@', '').strip()
+
+                                                                                                    if not username:
+                                                                                                         pass
+                                                                                                    response = await ctx.send("❌ Nom d'utilisateur invalide !")
+                                                                                                    asyncio.create_task(delete_command_messages(ctx, response))
+                                                                                                    return
+
+                                                                                                if channel_id not in streamers:
+                                                                                                     pass
+                                                                                                streamers[channel_id] = []
+
+                                                                                                if username in streamers[channel_id]:
+                                                                                                     pass
+                                                                                                response = await ctx.send(f"❌ {username} est déjà dans la liste !")
+                                                                                                asyncio.create_task(delete_command_messages(ctx, response))
+                                                                                                return
+
+                                                                                            user_info = await twitch_api.get_user_info(username)
+                                                                                            if not user_info:
+                                                                                                 pass
+                                                                                            response = await ctx.send(f"❌ Le streamer {username} n'existe pas sur Twitch !")
+                                                                                            asyncio.create_task(delete_command_messages(ctx, response))
+                                                                                            return
+
+                                                                                        streamers[channel_id].append(username)
+                                                                                        response = await ctx.send(f"✅ {username} ajouté à la liste des streamers surveillés !")
+                                                                                        asyncio.create_task(delete_command_messages(ctx, response))
+
+
+                                                                                        @bot.command(name='addstreamers')
+                                                                                        @commands.has_permissions(manage_channels=True)
+                                                                                        async def add_streamers(ctx, *usernames):
+                                                                                            if not usernames:
+                                                                                                 pass
+                                                                                            response = await ctx.send("❌ Veuillez spécifier au moins un nom d'utilisateur Twitch !\nExemple: `!addstreamers streamer1 streamer2 streamer3`")
+                                                                                            asyncio.create_task(delete_command_messages(ctx, response))
+                                                                                            return
+
+                                                                                        channel_id = ctx.channel.id
+                                                                                        if channel_id not in streamers:
+                                                                                             pass
+                                                                                        streamers[channel_id] = []
+
+                                                                                        added_streamers = []
+                                                                                        already_exists = []
+                                                                                        invalid_streamers = []
+
+                                                                                        for username in usernames:
+                                                                                             pass
+                                                                                        username = username.lower().replace('@', '').strip()
+
+                                                                                        if not username:
+                                                                                             pass
+                                                                                        continue
+
+                                                                                    if username in streamers[channel_id]:
+                                                                                         pass
+                                                                                    already_exists.append(username)
+                                                                                    continue
+
+                                                                                user_info = await twitch_api.get_user_info(username)
+                                                                                if not user_info:
+                                                                                     pass
+                                                                                invalid_streamers.append(username)
+                                                                                continue
+
+                                                                            streamers[channel_id].append(username)
+                                                                            added_streamers.append(username)
+
+                                                                            message_parts = []
+
+                                                                            if added_streamers:
+                                                                                 pass
+                                                                            message_parts.append(f"✅ **Streamers ajoutés:** {', '.join(added_streamers)}")
+
+                                                                            if already_exists:
+                                                                                 pass
+                                                                            message_parts.append(f"⚠️ **Déjà dans la liste:** {', '.join(already_exists)}")
+
+                                                                            if invalid_streamers:
+                                                                                 pass
+                                                                            message_parts.append(f"❌ **Streamers introuvables:** {', '.join(invalid_streamers)}")
+
+                                                                            if not message_parts:
+                                                                                 pass
+                                                                            message_parts.append("❌ Aucun streamer valide fourni !")
+
+                                                                            response = await ctx.send("\n".join(message_parts))
+                                                                            asyncio.create_task(delete_command_messages(ctx, response))
+
+
+                                                                            @bot.command(name='removestreamer')
+                                                                            @commands.has_permissions(manage_channels=True)
+                                                                            async def remove_streamer(ctx, username=None):
+                                                                                if username is None:
+                                                                                     pass
+                                                                                response = await ctx.send("❌ Veuillez spécifier un nom d'utilisateur Twitch !")
+                                                                                asyncio.create_task(delete_command_messages(ctx, response))
+                                                                                return
+
+                                                                            channel_id = ctx.channel.id
+                                                                            username = username.lower().replace('@', '').strip()
+
+                                                                            if channel_id not in streamers or username not in streamers[channel_id]:
+                                                                                 pass
+                                                                            response = await ctx.send(f"❌ {username} n'est pas dans la liste !")
+                                                                            asyncio.create_task(delete_command_messages(ctx, response))
+                                                                            return
+
+                                                                        streamers[channel_id].remove(username)
+
+                                                                        message_key = f"{channel_id}_{username}"
+                                                                        if message_key in stream_messages:
+                                                                        try:
+                                                                            message = await ctx.channel.fetch_message(stream_messages[message_key])
+                                                                            await message.delete()
+                                                                            except:
+                                                                                pass
+                                                                            finally:
+                                                                                stream_messages.pop(message_key, None)
+
+                                                                                response = await ctx.send(f"✅ {username} retiré de la liste des streamers surveillés !")
+                                                                                asyncio.create_task(delete_command_messages(ctx, response))
+
+
+                                                                                @bot.command(name='liststreamer')
+                                                                                async def list_streamers(ctx):
+                                                                                    channel_id = ctx.channel.id
+
+                                                                                    if channel_id not in streamers or not streamers[channel_id]:
+                                                                                         pass
+                                                                                    await ctx.send("📋 Aucun streamer surveillé dans ce channel !")
+                                                                                    return
+
+                                                                                embed = discord.Embed(
+                                                                                title="📋 Streamers surveillés",
+                                                                                description="\n".join(f"• {streamer}" for streamer in streamers[channel_id]),
+                                                                                color=0x9146ff
+                                                                                )
+                                                                                await ctx.send(embed=embed)
+
+
+                                                                                @bot.command(name='pingrole')
+                                                                                @commands.has_permissions(manage_roles=True)
+                                                                                async def set_ping_role(ctx, role: discord.Role = None):
+                                                                                    channel_id = ctx.channel.id
+
+                                                                                    if role is None:
+                                                                                    if channel_id in ping_roles:
+                                                                                         pass
+                                                                                    del ping_roles[channel_id]
+                                                                                    await ctx.send("✅ Rôle de ping Twitch désactivé pour ce channel !")
+                                                                                    return
+
+                                                                                ping_roles[channel_id] = role.id
+                                                                                await ctx.send(f"✅ Le rôle {role.mention} sera ping lors des notifications Twitch !")
+
+
+                                                                                @bot.command(name='reactionrole')
+                                                                                @commands.has_permissions(manage_roles=True)
+                                                                                async def create_reaction_role(ctx, role: discord.Role = None, emoji: str = "🔔"):
+                                                                                    """Crée un message sur lequel les utilisateurs peuvent réagir pour obtenir un rôle"""
+                                                                                    if role is None:
+                                                                                         pass
+                                                                                    await ctx.send("❌ Veuillez spécifier un rôle !\nExemple: `!reactionrole @Notifications 🔔`")
+                                                                                    return
+
+                                                                                # Créer l'embed pour le message de réaction
+                                                                                embed = discord.Embed(
+                                                                                title="🎯 Rôle par Réaction",
+                                                                                description=f"Réagissez avec {emoji} pour obtenir le rôle **{role.name}**\n\nRéagissez à nouveau pour retirer le rôle.",
+                                                                                color=0x9146ff
+                                                                                )
+                                                                                embed.add_field(name="Rôle", value=role.mention, inline=True)
+                                                                                embed.add_field(name="Emoji", value=emoji, inline=True)
+                                                                                embed.set_footer(text="Système de rôles automatique")
+
+                                                                                # Supprimer le message de commande
+                                                                                try:
+                                                                                    await ctx.message.delete()
+                                                                                    except:
+                                                                                        pass
+
+                                                                                    # Envoyer le message et ajouter la réaction
+                                                                                    message = await ctx.send(embed=embed)
+                                                                                    await message.add_reaction(emoji)
+
+                                                                                    # Stocker les informations pour le système de réaction
+                                                                                    reaction_role_messages[message.id] = {
+                                                                                    'role_id': role.id,
+                                                                                    'emoji': emoji,
+                                                                                    'guild_id': ctx.guild.id
+                                                                                }
+
+                                                                                logger.info(f"Message de réaction créé pour le rôle {role.name} avec l'emoji {emoji}")
+
+                                                                                @bot.event
+                                                                                async def on_reaction_add(reaction, user):
+                                                                                    """Gère l'ajout de réactions pour donner des rôles et accès rapide aux liens"""
+                                                                                    if user.bot:
+                                                                                         pass
+                                                                                    return
+
+                                                                                # Système de rôles par réaction
+                                                                                message_id = reaction.message.id
+                                                                                if message_id in reaction_role_messages:
+                                                                                     pass
+                                                                                role_data = reaction_role_messages[message_id]
+
+                                                                                # Vérifier si c'est le bon emoji
+                                                                                if str(reaction.emoji) != role_data['emoji']:
+                                                                                     pass
+                                                                                return
+
+                                                                            # Récupérer le rôle et l'utilisateur
+                                                                            guild = bot.get_guild(role_data['guild_id'])
+                                                                            if not guild:
+                                                                                 pass
+                                                                            return
+
+                                                                        role = guild.get_role(role_data['role_id'])
+                                                                        member = guild.get_member(user.id)
+
+                                                                        if not role or not member:
+                                                                             pass
+                                                                        return
+
+                                                                    # Ajouter le rôle
+                                                                    try:
+                                                                        await member.add_roles(role)
+                                                                        logger.info(f"Rôle {role.name} ajouté à {member.name}")
+                                                                        except discord.Forbidden:
+                                                                            logger.error(f"Pas de permission pour ajouter le rôle {role.name} à {member.name}")
+                                                                            except Exception as e:
+                                                                                logger.error(f"Erreur lors de l'ajout du rôle: {e}")
+                                                                                return
+
+                                                                            # Gestion des réactions sur les messages LoL (accès rapide au spectate)
+                                                                            if str(reaction.emoji) == "👁️":
+                                                                                 pass
+                                                                            # Vérifier si c'est un message de notification LoL
+                                                                            for message_key, stored_message_id in lol_game_messages.items():
+                                                                            if stored_message_id == message_id:
+                                                                                 pass
+                                                                            # Extraire le nom du joueur
+                                                                            player_name = message_key.split('_', 1)[1]
+                                                                            spectate_url = f"https://op.gg/summoners/euw/{player_name.replace(' ', '%20')}"
+
+                                                                            try:
+                                                                                # Envoyer le lien en message privé
+                                                                                await user.send(f"🎮 **Lien direct pour spectater {player_name}:**\n{spectate_url}")
+                                                                                except discord.Forbidden:
+                                                                                    # Si impossible d'envoyer en MP, envoyer dans le channel
+                                                                                    await reaction.message.channel.send(f"{user.mention} 🎮 **Lien pour spectater {player_name}:** {spectate_url}", delete_after=30)
+                                                                                    except Exception as e:
+                                                                                        logger.error(f"Erreur lors de l'envoi du lien spectate: {e}")
+                                                                                        break
+
+                                                                                    @bot.event
+                                                                                    async def on_reaction_remove(reaction, user):
+                                                                                        """Gère la suppression de réactions pour retirer des rôles"""
+                                                                                        if user.bot:
+                                                                                             pass
+                                                                                        return
+
+                                                                                    message_id = reaction.message.id
+                                                                                    if message_id not in reaction_role_messages:
+                                                                                         pass
+                                                                                    return
+
+                                                                                role_data = reaction_role_messages[message_id]
+
+                                                                                # Vérifier si c'est le bon emoji
+                                                                                if str(reaction.emoji) != role_data['emoji']:
+                                                                                     pass
+                                                                                return
+
+                                                                            # Récupérer le rôle et l'utilisateur
+                                                                            guild = bot.get_guild(role_data['guild_id'])
+                                                                            if not guild:
+                                                                                 pass
+                                                                            return
+
+                                                                        role = guild.get_role(role_data['role_id'])
+                                                                        member = guild.get_member(user.id)
+
+                                                                        if not role or not member:
+                                                                             pass
+                                                                        return
+
+                                                                    # Retirer le rôle
+                                                                    try:
+                                                                        await member.remove_roles(role)
+                                                                        logger.info(f"Rôle {role.name} retiré de {member.name}")
+                                                                        except discord.Forbidden:
+                                                                            logger.error(f"Pas de permission pour retirer le rôle {role.name} de {member.name}")
+                                                                            except Exception as e:
+                                                                                logger.error(f"Erreur lors du retrait du rôle: {e}")
+
+
+                                                                                @bot.command(name='help')
+                                                                                async def bot_help(ctx):
+                                                                                    """Affiche toutes les commandes disponibles"""
+                                                                                    embed = discord.Embed(
+                                                                                    title="🤖 Aide du Bot Multi-Fonctions",
+                                                                                    description="Toutes les commandes disponibles :",
+                                                                                    color=0x00ff00
+                                                                                    )
+
+                                                                                    # Commandes Twitch
+                                                                                    embed.add_field(
+                                                                                    name="📺 **Commandes Twitch**",
+                                                                                    value=(
+                                                                                    "`!addstreamer <username>` - Ajouter un streamer\n"
+                                                                                    "`!addstreamers <user1> <user2> ...` - Ajouter plusieurs streamers\n"
+                                                                                    "`!removestreamer <username>` - Retirer un streamer\n"
+                                                                                    "`!liststreamer` - Afficher les streamers surveillés\n"
+                                                                                    "`!pingrole [@role]` - Définir le rôle à ping Twitch"
+                                                                                    ),
+                                                                                    inline=False
+                                                                                    )
+
+                                                                                    # Commandes LoL
+                                                                                    embed.add_field(
+                                                                                    name="🎮 **Commandes League of Legends**",
+                                                                                    value=(
+                                                                                    "`!addlol <summoner>` - Ajouter un joueur LoL\n"
+                                                                                    "`!removelol <summoner>` - Retirer un joueur LoL\n"
+                                                                                    "`!listlol` - Afficher les joueurs LoL surveillés\n"
+                                                                                    "`!lolping [@role]` - Définir le rôle à ping LoL"
+                                                                                    ),
+                                                                                    inline=False
+                                                                                    )
+
+                                                                                    # Commandes générales
+                                                                                    embed.add_field(
+                                                                                    name="⚙️ **Commandes Générales**",
+                                                                                    value=(
+                                                                                    "`!reactionrole [@role] [emoji]` - Créer un rôle par réaction\n"
+                                                                                    "`!help` - Afficher cette aide"
+                                                                                    ),
+                                                                                    inline=False
+                                                                                    )
+
+                                                                                    embed.add_field(
+                                                                                    name="ℹ️ **Informations**",
+                                                                                    value=(
+                                                                                    "• Les notifications LoL incluent une réaction 👁️ pour un accès rapide au spectate\n"
+                                                                                    "• Les commandes de gestion s'auto-suppriment après 5 secondes\n"
+                                                                                    "• Vérification Twitch: chaque minute\n"
+                                                                                    "• Vérification LoL: toutes les 2 minutes"
+                                                                                    ),
+                                                                                    inline=False
+                                                                                    )
+
+                                                                                    embed.set_footer(text="Bot créé pour surveiller Twitch et League of Legends")
+                                                                                    await ctx.send(embed=embed)
+
+
+                                                                                    @bot.command(name='streamhelp')
+                                                                                    async def stream_help(ctx):
+                                                                                        """Aide spécifique pour les commandes Twitch (rétrocompatibilité)"""
+                                                                                        embed = discord.Embed(
+                                                                                        title="📺 Aide Twitch",
+                                                                                        description="Commandes Twitch disponibles :",
+                                                                                        color=0x9146ff
+                                                                                        )
+                                                                                        embed.add_field(name="!addstreamer <username>", value="Ajouter un streamer à surveiller", inline=False)
+                                                                                        embed.add_field(name="!addstreamers <user1> <user2> ...", value="Ajouter plusieurs streamers d'un coup", inline=False)
+                                                                                        embed.add_field(name="!removestreamer <username>", value="Retirer un streamer de la surveillance", inline=False)
+                                                                                        embed.add_field(name="!liststreamer", value="Afficher la liste des streamers surveillés", inline=False)
+                                                                                        embed.add_field(name="!pingrole [@role]", value="Définir le rôle à ping (sans rôle = désactiver)", inline=False)
+                                                                                        embed.set_footer(text="Les commandes addstreamer et removestreamer s'auto-suppriment après 5 secondes")
+                                                                                        await ctx.send(embed=embed)
+
+
+                                                                                        @bot.command(name='lolhelp')
+                                                                                        async def lol_help(ctx):
+                                                                                            """Aide spécifique pour les commandes LoL"""
+                                                                                            embed = discord.Embed(
+                                                                                            title="🎮 Aide League of Legends",
+                                                                                            description="Commandes LoL disponibles :",
+                                                                                            color=0x0f2027
+                                                                                            )
+                                                                                            embed.add_field(name="!addlol <summoner>", value="Ajouter un joueur LoL à surveiller", inline=False)
+                                                                                            embed.add_field(name="!removelol <summoner>", value="Retirer un joueur LoL de la surveillance", inline=False)
+                                                                                            embed.add_field(name="!listlol", value="Afficher la liste des joueurs LoL surveillés", inline=False)
+                                                                                            embed.add_field(name="!lolping [@role]", value="Définir le rôle à ping LoL (sans rôle = désactiver)", inline=False)
+                                                                                            embed.add_field(
+                                                                                            name="ℹ️ **Fonctionnalités**",
+                                                                                            value=(
+                                                                                            "• Surveillance via OP.GG\n"
+                                                                                            "• Notifications avec réaction 👁️ pour spectate rapide\n"
+                                                                                            "• Région par défaut: EUW\n"
+                                                                                            "• Vérification toutes les 2 minutes"
+                                                                                            ),
+                                                                                            inline=False
+                                                                                            )
+                                                                                            embed.set_footer(text="Les commandes s'auto-suppriment après 5 secondes")
+                                                                                            await ctx.send(embed=embed)
+
+                                                                                            @bot.event
+                                                                                            async def on_command_error(ctx, error):
+                                                                                                if isinstance(error, commands.MissingPermissions):
+                                                                                                     pass
+                                                                                                response = await ctx.send("❌ Vous n'avez pas les permissions nécessaires pour cette commande !")
+                                                                                                if ctx.command.name in ['addstreamer', 'removestreamer', 'addstreamers', 'addlol', 'removelol']:
+                                                                                                     pass
+                                                                                                asyncio.create_task(delete_command_messages(ctx, response))
+                                                                                                elif isinstance(error, commands.BadArgument):
+                                                                                                     pass
+                                                                                                response = await ctx.send("❌ Argument invalide ! Utilisez `!help` pour voir les commandes.")
+                                                                                                if ctx.command.name in ['addstreamer', 'removestreamer', 'addstreamers', 'addlol', 'removelol']:
+                                                                                                     pass
+                                                                                                asyncio.create_task(delete_command_messages(ctx, response))
+                                                                                                elif isinstance(error, commands.MissingRequiredArgument):
+                                                                                                     pass
+                                                                                                response = await ctx.send("❌ Argument manquant ! Utilisez `!help` pour voir les commandes.")
+                                                                                                if ctx.command.name in ['addstreamer', 'removestreamer', 'addstreamers', 'addlol', 'removelol']:
+                                                                                                     pass
+                                                                                                asyncio.create_task(delete_command_messages(ctx, response))
+                                                                                                else:
+                                                                                                    logger.error(f"Erreur non gérée: {error}")
+
+                                                                                                    @bot.event
+                                                                                                    async def on_disconnect():
+                                                                                                        if check_streams.is_running():
+                                                                                                             pass
+                                                                                                        check_streams.cancel()
+                                                                                                        if check_lol_games.is_running():
+                                                                                                             pass
+                                                                                                        check_lol_games.cancel()
+                                                                                                        await opgg_api.close_session()
+
+
+                                                                                                        if __name__ == "__main__":
+                                                                                                             pass
+                                                                                                        Thread(target=run_flask).start()
+                                                                                                        token = os.getenv("DISCORD_BOT_TOKEN")
+                                                                                                        if not token:
+                                                                                                             pass
+                                                                                                        print("❌ Le token Discord est manquant !")
+                                                                                                        else:
+                                                                                                            try:
+                                                                                                                print(f"🚀 Connexion avec le token: {token[:10]}...")
+                                                                                                                bot.run(token)
+                                                                                                                except discord.errors.LoginFailure:
+                                                                                                                    print("❌ Token Discord invalide !")
+                                                                                                                    except Exception as e:
+                                                                                                                        logger.error(f"Erreur lors du lancement du bot: {e}")
+                                                                                                                        finally:
+                                                                                                                            # Nettoyage des sessions
+                                                                                                                            asyncio.run(opgg_api.close_session())
