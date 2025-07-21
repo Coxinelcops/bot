@@ -1,10 +1,5 @@
-import discord
-from discord.ext import commands
-import json
-import os
 
-bot = commands.Bot(command_prefix='!', intents=discord.Intents.all())
-
+# === Système de rôles par réaction (sauvegarde + debug) ===
 reaction_roles_file = "reaction_roles.json"
 
 def load_reaction_roles():
@@ -19,44 +14,6 @@ def save_reaction_roles():
 
 reaction_role_messages = load_reaction_roles()
 
-@bot.command(name='reactionrole')
-@commands.has_permissions(manage_roles=True)
-async def create_reaction_role(ctx, role: discord.Role = None, emoji: str = "🔔"):
-    if role is None:
-        await ctx.send("❌ Veuillez spécifier un rôle ! Exemple : `!reactionrole @Notifications 🔔`")
-        return
-
-    if role >= ctx.guild.me.top_role:
-        await ctx.send("❌ Je ne peux pas gérer ce rôle (il est au-dessus de mon rôle actuel).")
-        return
-
-    embed = discord.Embed(
-        title="🎯 Rôle par Réaction",
-        description=f"Réagis avec {emoji} pour obtenir le rôle **{role.name}**.\n"
-                    f"Réagis à nouveau pour l'enlever.",
-        color=0x9146ff
-    )
-    embed.add_field(name="Rôle", value=role.mention, inline=True)
-    embed.add_field(name="Emoji", value=emoji, inline=True)
-    embed.set_footer(text="Système de rôles automatique")
-
-    try:
-        await ctx.message.delete()
-    except:
-        pass
-
-    message = await ctx.send(embed=embed)
-    await message.add_reaction(emoji)
-
-    reaction_role_messages[str(message.id)] = {
-        'role_id': role.id,
-        'emoji': emoji,
-        'guild_id': ctx.guild.id
-    }
-    save_reaction_roles()
-
-    await ctx.send(f"✅ Rôle {role.name} lié au message avec l’emoji {emoji}")
-
 @bot.command(name='reactionroledebug')
 async def reactionrole_debug(ctx):
     """Affiche les données enregistrées pour les messages à rôle"""
@@ -66,7 +23,8 @@ async def reactionrole_debug(ctx):
 
     msg = "**Messages enregistrés :**\n"
     for msg_id, data in reaction_role_messages.items():
-        msg += f"• ID: `{msg_id}` | Rôle: `<@&{data['role_id']}>` | Emoji: `{data['emoji']}`\n"
+        role = ctx.guild.get_role(data['role_id'])
+        msg += f"• ID: `{msg_id}` | Rôle: `{role.name if role else 'Inconnu'}` | Emoji: `{data['emoji']}`\n"
     await ctx.send(msg)
 
 @bot.event
@@ -85,8 +43,6 @@ async def on_reaction_add(reaction, user):
     if not data:
         print("[DEBUG] 🔴 Aucune donnée trouvée pour ce message")
         return
-
-    print(f"[DEBUG] Données trouvées : {data}")
 
     if str(reaction.emoji) != data['emoji']:
         print("[DEBUG] ❌ Emoji ne correspond pas à l’attendu")
@@ -111,3 +67,4 @@ async def on_reaction_add(reaction, user):
             print(f"[DEBUG] ✅ Rôle {role.name} ajouté à {member.name}")
         except Exception as e:
             print(f"[ERREUR] ❌ Impossible d’ajouter le rôle : {e}")
+if __name__ == "__main__":
