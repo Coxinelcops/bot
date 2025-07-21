@@ -67,4 +67,3 @@ async def on_reaction_add(reaction, user):
             print(f"[DEBUG] ✅ Rôle {role.name} ajouté à {member.name}")
         except Exception as e:
             print(f"[ERREUR] ❌ Impossible d’ajouter le rôle : {e}")
-if __name__ == "__main__":
