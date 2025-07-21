@@ -31,6 +31,12 @@ intents.reactions = True
 
 bot = commands.Bot(command_prefix='!', intents=intents)
 
+@bot.event
+async def on_resumed():
+    if not check_streams.is_running():
+        check_streams.start()
+        logger.info("🔁 Tâche check_streams relancée après reconnexion")
+
 # === Twitch credentials (variables d'environnement) ===
 TWITCH_CLIENT_ID = os.getenv("TWITCH_CLIENT_ID")
 TWITCH_CLIENT_SECRET = os.getenv("TWITCH_CLIENT_SECRET")
@@ -657,8 +663,7 @@ async def on_command_error(ctx, error):
 
 @bot.event
 async def on_disconnect():
-    if check_streams.is_running():
-        check_streams.cancel()
+    logger.warning("🔌 Déconnecté de Discord")
 
 # === Lancement ===
 if __name__ == "__main__":
