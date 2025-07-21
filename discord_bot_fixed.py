@@ -29,7 +29,8 @@ intents.message_content = True
 intents.guilds = True
 intents.reactions = True
 
-bot = commands.Bot(command_prefix='!', intents=intents)
+# MODIFICATION: Désactiver la commande help par défaut
+bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
 
 # === Twitch credentials (variables d'environnement) ===
 TWITCH_CLIENT_ID = os.getenv("TWITCH_CLIENT_ID")
@@ -613,20 +614,49 @@ async def on_reaction_remove(reaction, user):
     except Exception as e:
         logger.error(f"Erreur lors du retrait du rôle: {e}")
 
-@bot.command(name='streamhelp')
-async def stream_help(ctx):
-    response = """**🤖 Commandes du Bot Twitch :**
-
-`!addstreamer <username>` - Ajouter un streamer à surveiller
-`!addstreamers <user1> <user2> ...` - Ajouter plusieurs streamers
-`!removestreamer <username>` - Retirer un streamer
-`!liststreamer` - Liste des streamers surveillés
-`!pingrole [@role]` - Définir le rôle à ping (sans rôle = désactiver)
-`!reactionrole [@role] [emoji]` - Message pour obtenir un rôle par réaction
-
-⏱️ Mise à jour automatique toutes les 2 minutes"""
+# MODIFICATION: Remplacer !streamhelp par !help
+@bot.command(name='help')
+async def help_command(ctx):
+    """Commande d'aide personnalisée du bot"""
+    embed = discord.Embed(
+        title="🤖 Aide du Bot Twitch",
+        description="Voici toutes les commandes disponibles :",
+        color=0x9146ff
+    )
     
-    await ctx.send(response)
+    embed.add_field(
+        name="📺 Gestion des Streamers", 
+        value="`!addstreamer <username>` - Ajouter un streamer\n"
+              "`!addstreamers <user1> <user2> ...` - Ajouter plusieurs streamers\n"
+              "`!removestreamer <username>` - Retirer un streamer\n"
+              "`!liststreamer` - Liste des streamers surveillés",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="🔔 Notifications", 
+        value="`!pingrole [@role]` - Définir le rôle à ping\n"
+              "`!reactionrole [@role] [emoji]` - Créer un système de rôle par réaction",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="🛠️ Administration", 
+        value="`!checkstreams` - Vérification manuelle des streams",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="ℹ️ Informations", 
+        value="⏱️ Vérification automatique toutes les 2 minutes\n"
+              "🔄 Messages mis à jour en temps réel\n"
+              "🗑️ Nettoyage automatique des commandes",
+        inline=False
+    )
+    
+    embed.set_footer(text="💡 Utilisez les commandes avec le préfixe !")
+    
+    await ctx.send(embed=embed)
 
 # Test command pour vérifier que la vérification fonctionne
 @bot.command(name='checkstreams')
@@ -645,11 +675,11 @@ async def on_command_error(ctx, error):
         if ctx.command.name in ['addstreamer', 'removestreamer', 'addstreamers']:
             asyncio.create_task(delete_command_messages(ctx, response))
     elif isinstance(error, commands.BadArgument):
-        response = await ctx.send("❌ Argument invalide ! Utilisez `!streamhelp` pour voir les commandes.")
+        response = await ctx.send("❌ Argument invalide ! Utilisez `!help` pour voir les commandes.")
         if ctx.command.name in ['addstreamer', 'removestreamer', 'addstreamers']:
             asyncio.create_task(delete_command_messages(ctx, response))
     elif isinstance(error, commands.MissingRequiredArgument):
-        response = await ctx.send("❌ Argument manquant ! Utilisez `!streamhelp` pour voir les commandes.")
+        response = await ctx.send("❌ Argument manquant ! Utilisez `!help` pour voir les commandes.")
         if ctx.command.name in ['addstreamer', 'removestreamer', 'addstreamers']:
             asyncio.create_task(delete_command_messages(ctx, response))
     else:
