@@ -17,7 +17,7 @@ def home():
     return "Bot Discord actif."
 
 def run_flask():
-    app.run(host='0.0.0.0', port=8080)
+    app.run(host='0.0.0.0', port=8000)
 
 # === Logger ===
 logging.basicConfig(level=logging.INFO)
@@ -33,15 +33,48 @@ intents.reactions = True
 bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
 
 # === Twitch credentials (variables d'environnement) ===
-TWITCH_CLIENT_ID = os.getenv("TWITCH_CLIENT_ID")
-TWITCH_CLIENT_SECRET = os.getenv("TWITCH_CLIENT_SECRET")
+TWITCH_CLIENT_ID = os.getenv("TWITCH_CLIENT_ID", "")
+TWITCH_CLIENT_SECRET = os.getenv("TWITCH_CLIENT_SECRET", "")
 
+# === Data Storage ===
 streamers = {}
 stream_messages = {}  # Format: {channel_id_username: {'message_id': id, 'last_update': timestamp}}
 currently_live_streamers = {}  # Pour suivre qui est actuellement en live
 ping_roles = {}
 notification_channels = {}
-reaction_role_messages = {}
+reaction_role_messages = {}  # Format: {message_id: {emoji: role_id}}
+
+def load_config():
+    """Charge la configuration depuis le fichier JSON"""
+    try:
+        with open('config.json', 'r', encoding='utf-8') as f:
+            config = json.load(f)
+            global streamers, ping_roles, notification_channels, reaction_role_messages
+            streamers = config.get('streamers', {})
+            ping_roles = config.get('ping_roles', {})
+            notification_channels = config.get('notification_channels', {})
+            reaction_role_messages = config.get('reaction_role_messages', {})
+            logger.info("Configuration chargée avec succès")
+    except FileNotFoundError:
+        logger.info("Aucun fichier de configuration trouvé, utilisation des valeurs par défaut")
+        save_config()
+    except Exception as e:
+        logger.error(f"Erreur lors du chargement de la configuration: {e}")
+
+def save_config():
+    """Sauvegarde la configuration dans le fichier JSON"""
+    try:
+        config = {
+            'streamers': streamers,
+            'ping_roles': ping_roles,
+            'notification_channels': notification_channels,
+            'reaction_role_messages': reaction_role_messages
+        }
+        with open('config.json', 'w', encoding='utf-8') as f:
+            json.dump(config, f, indent=2, ensure_ascii=False)
+        logger.info("Configuration sauvegardée avec succès")
+    except Exception as e:
+        logger.error(f"Erreur lors de la sauvegarde de la configuration: {e}")
 
 class TwitchAPI:
     def __init__(self):
@@ -146,10 +179,498 @@ twitch_api = TwitchAPI()
 @bot.event
 async def on_ready():
     print(f'{bot.user} est connecté et prêt !')
+    load_config()
     await twitch_api.get_token()
     if not check_streams.is_running():
         check_streams.start()
         logger.info("Vérification des streams démarrée")
+
+# === REACTION ROLE EVENTS ===
+@bot.event
+async def on_raw_reaction_add(payload):
+    """Gère l'ajout de réactions pour attribuer des rôles"""
+    # Ignorer les réactions du bot
+    if bot.user and payload.user_id == bot.user.id:
+        return
+    
+    message_id = str(payload.message_id)
+    
+    # Vérifier si ce message est configuré pour les réactions-rôles
+    if message_id not in reaction_role_messages:
+        return
+    
+    emoji_str = str(payload.emoji)
+    role_config = reaction_role_messages[message_id]
+    
+    # Vérifier si cette emoji correspond à un rôle
+    if emoji_str not in role_config:
+        return
+    
+    guild = bot.get_guild(payload.guild_id)
+    if not guild:
+        logger.error(f"Guild {payload.guild_id} non trouvée")
+        return
+    
+    member = guild.get_member(payload.user_id)
+    if not member:
+        logger.error(f"Membre {payload.user_id} non trouvé")
+        return
+    
+    role_id = role_config[emoji_str]
+    role = guild.get_role(role_id)
+    if not role:
+        logger.error(f"Rôle {role_id} non trouvé")
+        return
+    
+    try:
+        await member.add_roles(role, reason="Réaction-rôle automatique")
+        logger.info(f"Rôle {role.name} attribué à {member.display_name}")
+    except discord.Forbidden:
+        logger.error(f"Pas de permission pour attribuer le rôle {role.name} à {member.display_name}")
+    except discord.HTTPException as e:
+        logger.error(f"Erreur HTTP lors de l'attribution du rôle: {e}")
+    except Exception as e:
+        logger.error(f"Erreur lors de l'attribution du rôle: {e}")
+
+@bot.event
+async def on_raw_reaction_remove(payload):
+    """Gère la suppression de réactions pour retirer des rôles"""
+    # Ignorer les réactions du bot
+    if bot.user and payload.user_id == bot.user.id:
+        return
+    
+    message_id = str(payload.message_id)
+    
+    # Vérifier si ce message est configuré pour les réactions-rôles
+    if message_id not in reaction_role_messages:
+        return
+    
+    emoji_str = str(payload.emoji)
+    role_config = reaction_role_messages[message_id]
+    
+    # Vérifier si cette emoji correspond à un rôle
+    if emoji_str not in role_config:
+        return
+    
+    guild = bot.get_guild(payload.guild_id)
+    if not guild:
+        logger.error(f"Guild {payload.guild_id} non trouvée")
+        return
+    
+    member = guild.get_member(payload.user_id)
+    if not member:
+        logger.error(f"Membre {payload.user_id} non trouvé")
+        return
+    
+    role_id = role_config[emoji_str]
+    role = guild.get_role(role_id)
+    if not role:
+        logger.error(f"Rôle {role_id} non trouvé")
+        return
+    
+    try:
+        await member.remove_roles(role, reason="Suppression réaction-rôle automatique")
+        logger.info(f"Rôle {role.name} retiré de {member.display_name}")
+    except discord.Forbidden:
+        logger.error(f"Pas de permission pour retirer le rôle {role.name} de {member.display_name}")
+    except discord.HTTPException as e:
+        logger.error(f"Erreur HTTP lors du retrait du rôle: {e}")
+    except Exception as e:
+        logger.error(f"Erreur lors du retrait du rôle: {e}")
+
+# === COMMANDES REACTION ROLE ===
+@bot.command(name='reactionrole')
+@commands.has_permissions(manage_roles=True)
+async def create_reaction_role(ctx, *, message_content=None):
+    """
+    Crée un message de réaction-rôle interactif
+    Usage: !reactionrole [message optionnel]
+    """
+    if not message_content:
+        message_content = "Réagissez pour obtenir vos rôles !"
+    
+    # Créer l'embed initial
+    embed = discord.Embed(
+        title="🎭 Configuration des rôles par réaction",
+        description=message_content,
+        color=0x00ff00
+    )
+    embed.add_field(
+        name="Instructions", 
+        value="Utilisez `!addrole @role :emoji:` pour ajouter des rôles à ce message.", 
+        inline=False
+    )
+    embed.set_footer(text="Réagissez avec les emojis pour obtenir les rôles correspondants")
+    
+    # Envoyer le message
+    message = await ctx.send(embed=embed)
+    
+    # Initialiser la configuration pour ce message
+    reaction_role_messages[str(message.id)] = {}
+    save_config()
+    
+    # Répondre avec les instructions
+    instructions_embed = discord.Embed(
+        title="✅ Message de réaction-rôle créé !",
+        description=f"ID du message: `{message.id}`",
+        color=0x00ff00
+    )
+    instructions_embed.add_field(
+        name="Prochaine étape",
+        value=f"Utilisez `!addrole <@role> <:emoji:> {message.id}` pour ajouter des rôles à ce message.",
+        inline=False
+    )
+    instructions_embed.add_field(
+        name="Exemple",
+        value=f"`!addrole @Membre ✅ {message.id}`",
+        inline=False
+    )
+    
+    await ctx.send(embed=instructions_embed, delete_after=30)
+    logger.info(f"Message de réaction-rôle créé par {ctx.author} avec l'ID {message.id}")
+
+@bot.command(name='addrole')
+@commands.has_permissions(manage_roles=True)
+async def add_role_to_message(ctx, role: discord.Role, emoji, message_id: int):
+    """
+    Ajoute un rôle à un message de réaction-rôle existant
+    Usage: !addrole @role :emoji: message_id
+    """
+    message_id_str = str(message_id)
+    
+    # Vérifier si le message existe dans la configuration
+    if message_id_str not in reaction_role_messages:
+        embed = discord.Embed(
+            title="❌ Erreur",
+            description=f"Aucun message de réaction-rôle trouvé avec l'ID `{message_id}`",
+            color=0xff0000
+        )
+        await ctx.send(embed=embed, delete_after=10)
+        return
+    
+    # Vérifier les permissions du bot
+    if role >= ctx.guild.me.top_role:
+        embed = discord.Embed(
+            title="❌ Erreur de permission",
+            description=f"Je ne peux pas attribuer le rôle {role.mention} car il est plus haut que mon rôle le plus élevé.",
+            color=0xff0000
+        )
+        await ctx.send(embed=embed, delete_after=15)
+        return
+    
+    # Récupérer le message
+    try:
+        message = await ctx.fetch_message(message_id)
+    except discord.NotFound:
+        embed = discord.Embed(
+            title="❌ Message non trouvé",
+            description=f"Le message avec l'ID `{message_id}` n'existe pas dans ce canal.",
+            color=0xff0000
+        )
+        await ctx.send(embed=embed, delete_after=10)
+        return
+    except discord.Forbidden:
+        embed = discord.Embed(
+            title="❌ Permission refusée",
+            description="Je n'ai pas la permission de récupérer ce message.",
+            color=0xff0000
+        )
+        await ctx.send(embed=embed, delete_after=10)
+        return
+    
+    # Ajouter la configuration emoji-rôle
+    emoji_str = str(emoji)
+    reaction_role_messages[message_id_str][emoji_str] = role.id
+    save_config()
+    
+    # Ajouter la réaction au message
+    try:
+        await message.add_reaction(emoji)
+    except discord.HTTPException:
+        embed = discord.Embed(
+            title="⚠️ Attention",
+            description=f"Impossible d'ajouter la réaction {emoji} au message. L'emoji est peut-être invalide.",
+            color=0xffaa00
+        )
+        await ctx.send(embed=embed, delete_after=10)
+    
+    # Mettre à jour l'embed du message original
+    if message.embeds:
+        original_embed = message.embeds[0]
+        
+        # Récupérer les rôles actuels configurés
+        roles_list = []
+        for emoji_key, role_id in reaction_role_messages[message_id_str].items():
+            role_obj = ctx.guild.get_role(role_id)
+            if role_obj:
+                roles_list.append(f"{emoji_key} → {role_obj.mention}")
+        
+        if roles_list:
+            # Mettre à jour le champ des rôles
+            updated_embed = discord.Embed(
+                title=original_embed.title,
+                description=original_embed.description,
+                color=original_embed.color
+            )
+            updated_embed.add_field(
+                name="🎭 Rôles disponibles",
+                value="\n".join(roles_list),
+                inline=False
+            )
+            updated_embed.set_footer(text="Réagissez avec les emojis pour obtenir les rôles correspondants")
+            
+            try:
+                await message.edit(embed=updated_embed)
+            except discord.Forbidden:
+                logger.error("Pas de permission pour modifier le message de réaction-rôle")
+    
+    # Confirmer l'ajout
+    embed = discord.Embed(
+        title="✅ Rôle ajouté !",
+        description=f"Le rôle {role.mention} a été lié à {emoji}",
+        color=0x00ff00
+    )
+    await ctx.send(embed=embed, delete_after=10)
+    logger.info(f"Rôle {role.name} ajouté au message {message_id} avec l'emoji {emoji}")
+
+@bot.command(name='removerole')
+@commands.has_permissions(manage_roles=True)
+async def remove_role_from_message(ctx, emoji, message_id: int):
+    """
+    Supprime un rôle d'un message de réaction-rôle
+    Usage: !removerole :emoji: message_id
+    """
+    message_id_str = str(message_id)
+    emoji_str = str(emoji)
+    
+    # Vérifier si le message existe dans la configuration
+    if message_id_str not in reaction_role_messages:
+        embed = discord.Embed(
+            title="❌ Erreur",
+            description=f"Aucun message de réaction-rôle trouvé avec l'ID `{message_id}`",
+            color=0xff0000
+        )
+        await ctx.send(embed=embed, delete_after=10)
+        return
+    
+    # Vérifier si l'emoji existe
+    if emoji_str not in reaction_role_messages[message_id_str]:
+        embed = discord.Embed(
+            title="❌ Emoji non trouvé",
+            description=f"L'emoji {emoji} n'est pas configuré pour ce message.",
+            color=0xff0000
+        )
+        await ctx.send(embed=embed, delete_after=10)
+        return
+    
+    # Supprimer la configuration
+    role_id = reaction_role_messages[message_id_str].pop(emoji_str)
+    save_config()
+    
+    # Récupérer le message et supprimer la réaction
+    try:
+        message = await ctx.fetch_message(message_id)
+        await message.clear_reaction(emoji)
+    except discord.NotFound:
+        logger.warning(f"Message {message_id} non trouvé pour supprimer la réaction")
+    except discord.Forbidden:
+        logger.warning("Pas de permission pour supprimer les réactions")
+    except discord.HTTPException as e:
+        logger.error(f"Erreur lors de la suppression de la réaction: {e}")
+    
+    # Confirmer la suppression
+    role = ctx.guild.get_role(role_id)
+    role_name = role.name if role else f"Rôle ID {role_id}"
+    
+    embed = discord.Embed(
+        title="✅ Rôle supprimé !",
+        description=f"Le rôle {role_name} n'est plus lié à {emoji}",
+        color=0x00ff00
+    )
+    await ctx.send(embed=embed, delete_after=10)
+    logger.info(f"Rôle {role_name} supprimé du message {message_id}")
+
+@bot.command(name='listroles')
+@commands.has_permissions(manage_roles=True)
+async def list_reaction_roles(ctx, message_id: int | None = None):
+    """
+    Liste tous les messages de réaction-rôle ou les détails d'un message spécifique
+    Usage: !listroles [message_id]
+    """
+    if message_id:
+        message_id_str = str(message_id)
+        if message_id_str not in reaction_role_messages:
+            embed = discord.Embed(
+                title="❌ Message non trouvé",
+                description=f"Aucun message de réaction-rôle avec l'ID `{message_id}`",
+                color=0xff0000
+            )
+            await ctx.send(embed=embed, delete_after=10)
+            return
+        
+        # Afficher les détails du message spécifique
+        roles_config = reaction_role_messages[message_id_str]
+        embed = discord.Embed(
+            title=f"🎭 Configuration du message {message_id}",
+            color=0x0099ff
+        )
+        
+        if roles_config:
+            roles_list = []
+            for emoji, role_id in roles_config.items():
+                role = ctx.guild.get_role(role_id)
+                role_name = role.mention if role else f"Rôle supprimé (ID: {role_id})"
+                roles_list.append(f"{emoji} → {role_name}")
+            
+            embed.add_field(
+                name="Rôles configurés",
+                value="\n".join(roles_list),
+                inline=False
+            )
+        else:
+            embed.add_field(
+                name="Aucun rôle configuré",
+                value="Utilisez `!addrole` pour ajouter des rôles à ce message.",
+                inline=False
+            )
+    else:
+        # Lister tous les messages de réaction-rôle
+        embed = discord.Embed(
+            title="🎭 Tous les messages de réaction-rôle",
+            color=0x0099ff
+        )
+        
+        if reaction_role_messages:
+            messages_list = []
+            for msg_id, roles_config in reaction_role_messages.items():
+                role_count = len(roles_config)
+                messages_list.append(f"Message `{msg_id}`: {role_count} rôle(s)")
+            
+            embed.add_field(
+                name="Messages configurés",
+                value="\n".join(messages_list),
+                inline=False
+            )
+            embed.add_field(
+                name="Voir les détails",
+                value="Utilisez `!listroles <message_id>` pour voir les détails d'un message.",
+                inline=False
+            )
+        else:
+            embed.add_field(
+                name="Aucun message configuré",
+                value="Utilisez `!reactionrole` pour créer votre premier message de réaction-rôle.",
+                inline=False
+            )
+    
+    await ctx.send(embed=embed)
+
+# === GESTION DES ERREURS REACTION ROLE ===
+@create_reaction_role.error
+@add_role_to_message.error
+@remove_role_from_message.error
+@list_reaction_roles.error
+async def reaction_role_error(ctx, error):
+    if isinstance(error, commands.MissingPermissions):
+        embed = discord.Embed(
+            title="❌ Permission manquante",
+            description="Vous devez avoir la permission `Gérer les rôles` pour utiliser cette commande.",
+            color=0xff0000
+        )
+        await ctx.send(embed=embed, delete_after=15)
+    elif isinstance(error, commands.RoleNotFound):
+        embed = discord.Embed(
+            title="❌ Rôle non trouvé",
+            description="Le rôle spécifié n'existe pas. Vérifiez le nom ou la mention du rôle.",
+            color=0xff0000
+        )
+        await ctx.send(embed=embed, delete_after=15)
+    elif isinstance(error, commands.BadArgument):
+        embed = discord.Embed(
+            title="❌ Argument invalide",
+            description="Vérifiez la syntaxe de votre commande. Utilisez `!help` pour plus d'informations.",
+            color=0xff0000
+        )
+        await ctx.send(embed=embed, delete_after=15)
+    else:
+        logger.error(f"Erreur dans une commande de réaction-rôle: {error}")
+        embed = discord.Embed(
+            title="❌ Erreur inattendue",
+            description="Une erreur inattendue s'est produite. Contactez un administrateur.",
+            color=0xff0000
+        )
+        await ctx.send(embed=embed, delete_after=15)
+
+# === COMMANDE HELP PERSONNALISÉE ===
+@bot.command(name='help')
+async def custom_help(ctx, command_name=None):
+    """Affiche l'aide personnalisée du bot"""
+    if command_name:
+        # Aide spécifique à une commande
+        command_help = {
+            'reactionrole': {
+                'description': 'Crée un nouveau message de réaction-rôle',
+                'usage': '!reactionrole [message optionnel]',
+                'example': '!reactionrole Choisissez vos rôles !'
+            },
+            'addrole': {
+                'description': 'Ajoute un rôle à un message de réaction-rôle existant',
+                'usage': '!addrole @role :emoji: message_id',
+                'example': '!addrole @Membre ✅ 123456789'
+            },
+            'removerole': {
+                'description': 'Supprime un rôle d\'un message de réaction-rôle',
+                'usage': '!removerole :emoji: message_id',
+                'example': '!removerole ✅ 123456789'
+            },
+            'listroles': {
+                'description': 'Liste les messages de réaction-rôle configurés',
+                'usage': '!listroles [message_id]',
+                'example': '!listroles 123456789'
+            }
+        }
+        
+        if command_name.lower() in command_help:
+            cmd_info = command_help[command_name.lower()]
+            embed = discord.Embed(
+                title=f"📖 Aide - !{command_name}",
+                description=cmd_info['description'],
+                color=0x0099ff
+            )
+            embed.add_field(name="Usage", value=f"`{cmd_info['usage']}`", inline=False)
+            embed.add_field(name="Exemple", value=f"`{cmd_info['example']}`", inline=False)
+        else:
+            embed = discord.Embed(
+                title="❌ Commande non trouvée",
+                description=f"La commande `{command_name}` n'existe pas.",
+                color=0xff0000
+            )
+    else:
+        # Aide générale
+        embed = discord.Embed(
+            title="🤖 Aide du Bot Discord",
+            description="Voici la liste des commandes disponibles :",
+            color=0x0099ff
+        )
+        
+        embed.add_field(
+            name="🎭 Système de réaction-rôles",
+            value="`!reactionrole` - Créer un message de réaction-rôle\n"
+                  "`!addrole` - Ajouter un rôle à un message\n"
+                  "`!removerole` - Supprimer un rôle d'un message\n"
+                  "`!listroles` - Lister les configurations",
+            inline=False
+        )
+        
+        embed.add_field(
+            name="ℹ️ Plus d'informations",
+            value="Utilisez `!help <commande>` pour plus de détails sur une commande spécifique.",
+            inline=False
+        )
+        
+        embed.set_footer(text="Besoin d'aide ? Contactez un administrateur.")
+    
+    await ctx.send(embed=embed)
 
 @tasks.loop(minutes=2)
 async def check_streams():
@@ -160,12 +681,13 @@ async def check_streams():
             if not streamer_list:
                 continue
 
-            channel = bot.get_channel(channel_id)
+            channel = bot.get_channel(int(channel_id))
             if not channel:
                 logger.warning(f"Channel {channel_id} non trouvé")
                 continue
 
-            logger.info(f"Vérification de {len(streamer_list)} streamers pour le channel {channel.name}")
+            channel_name = getattr(channel, 'name', f'ID:{channel_id}')
+            logger.info(f"Vérification de {len(streamer_list)} streamers pour le channel {channel_name}")
             
             # Récupérer les streams actuels
             streams = await twitch_api.get_streams(streamer_list)
@@ -312,7 +834,8 @@ async def send_stream_notification(channel, stream):
         game_name = stream['game_name'] or "Pas de catégorie"
         viewer_count = stream['viewer_count']
         title = stream['title'] or "Pas de titre"
-
+        
+        # Créer l'embed de notification
         embed = discord.Embed(
             title=f"🔴 {stream['user_name']} est en live !",
             description=f"**{title}**",
@@ -322,385 +845,53 @@ async def send_stream_notification(channel, stream):
         embed.add_field(name="🎮 Catégorie", value=game_name, inline=True)
         embed.add_field(name="👥 Viewers", value=f"{viewer_count:,}", inline=True)
         embed.add_field(name="🔗 Lien", value=f"[Regarder le stream](https://twitch.tv/{username})", inline=False)
-
+        
         if stream.get('thumbnail_url'):
             thumbnail = stream['thumbnail_url'].replace('{width}', '320').replace('{height}', '180')
             thumbnail += f"?t={int(datetime.now().timestamp())}"
             embed.set_image(url=thumbnail)
-
-        embed.set_footer(text=f"Stream démarré • Mise à jour toutes les 2 minutes")
+        
+        embed.set_footer(text=f"Stream démarré à {datetime.now(UTC).strftime('%H:%M:%S')} UTC")
         embed.timestamp = datetime.now(UTC)
-
+        
+        # Ajouter les mentions si configurées
         content = ""
-        if channel.id in ping_roles:
-            role = channel.guild.get_role(ping_roles[channel.id])
+        channel_id = channel.id
+        if channel_id in ping_roles:
+            role_id = ping_roles[channel_id]
+            role = channel.guild.get_role(role_id)
             if role:
-                content = f"{role.mention} "
-
+                content = f"{role.mention} {stream['user_name']} est en live !"
+        
+        # Envoyer le message
         message = await channel.send(content=content, embed=embed)
-        message_key = f"{channel.id}_{username.lower()}"
+        
+        # Sauvegarder les informations du message
+        message_key = f"{channel_id}_{username}"
         stream_messages[message_key] = {
             'message_id': message.id,
             'last_update': datetime.now(UTC).timestamp()
         }
-
-        logger.info(f"🎉 Notification envoyée pour {username} dans {channel.name}")
-
-    except discord.Forbidden:
-        logger.error(f"Pas de permission pour envoyer un message dans {channel.name}")
+        
+        logger.info(f"✅ Notification envoyée pour {username} dans {channel.name}")
+        
     except Exception as e:
         logger.error(f"Erreur lors de l'envoi de la notification: {e}", exc_info=True)
 
-async def delete_command_messages(ctx, response_message=None):
-    """Supprime le message de commande et la réponse du bot après un délai"""
-    try:
-        await asyncio.sleep(5)
-        if ctx.message:
-            await ctx.message.delete()
-        if response_message:
-            await response_message.delete()
-    except discord.NotFound:
-        pass
-    except discord.Forbidden:
-        pass
-
-@bot.command(name='addstreamer')
-@commands.has_permissions(manage_channels=True)
-async def add_streamer(ctx, username=None):
-    if username is None:
-        response = await ctx.send("❌ Veuillez spécifier un nom d'utilisateur Twitch !")
-        asyncio.create_task(delete_command_messages(ctx, response))
-        return
-
-    channel_id = ctx.channel.id
-    username = username.lower().replace('@', '').strip()
-
-    if not username:
-        response = await ctx.send("❌ Nom d'utilisateur invalide !")
-        asyncio.create_task(delete_command_messages(ctx, response))
-        return
-
-    if channel_id not in streamers:
-        streamers[channel_id] = []
-
-    if username in streamers[channel_id]:
-        response = await ctx.send(f"❌ {username} est déjà dans la liste !")
-        asyncio.create_task(delete_command_messages(ctx, response))
-        return
-
-    user_info = await twitch_api.get_user_info(username)
-    if not user_info:
-        response = await ctx.send(f"❌ Le streamer {username} n'existe pas sur Twitch !")
-        asyncio.create_task(delete_command_messages(ctx, response))
-        return
-
-    streamers[channel_id].append(username)
-    response = await ctx.send(f"✅ {username} ajouté à la liste des streamers surveillés !")
-    asyncio.create_task(delete_command_messages(ctx, response))
-    
-    logger.info(f"Streamer {username} ajouté au channel {ctx.channel.name}")
-
-@bot.command(name='addstreamers')
-@commands.has_permissions(manage_channels=True)
-async def add_streamers(ctx, *usernames):
-    if not usernames:
-        response = await ctx.send("❌ Veuillez spécifier au moins un nom d'utilisateur Twitch !\nExemple: `!addstreamers streamer1 streamer2 streamer3`")
-        asyncio.create_task(delete_command_messages(ctx, response))
-        return
-
-    channel_id = ctx.channel.id
-    if channel_id not in streamers:
-        streamers[channel_id] = []
-
-    added_streamers = []
-    already_exists = []
-    invalid_streamers = []
-
-    for username in usernames:
-        username = username.lower().replace('@', '').strip()
-        
-        if not username:
-            continue
-            
-        if username in streamers[channel_id]:
-            already_exists.append(username)
-            continue
-
-        user_info = await twitch_api.get_user_info(username)
-        if not user_info:
-            invalid_streamers.append(username)
-            continue
-
-        streamers[channel_id].append(username)
-        added_streamers.append(username)
-
-    # Construire le message de réponse
-    message_parts = []
-    
-    if added_streamers:
-        message_parts.append(f"✅ **Streamers ajoutés:** {', '.join(added_streamers)}")
-    
-    if already_exists:
-        message_parts.append(f"⚠️ **Déjà dans la liste:** {', '.join(already_exists)}")
-    
-    if invalid_streamers:
-        message_parts.append(f"❌ **Streamers introuvables:** {', '.join(invalid_streamers)}")
-
-    if not message_parts:
-        message_parts.append("❌ Aucun streamer valide fourni !")
-
-    response = await ctx.send("\n".join(message_parts))
-    asyncio.create_task(delete_command_messages(ctx, response))
-
-@bot.command(name='removestreamer')
-@commands.has_permissions(manage_channels=True)
-async def remove_streamer(ctx, username=None):
-    if username is None:
-        response = await ctx.send("❌ Veuillez spécifier un nom d'utilisateur Twitch !")
-        asyncio.create_task(delete_command_messages(ctx, response))
-        return
-
-    channel_id = ctx.channel.id
-    username = username.lower().replace('@', '').strip()
-
-    if channel_id not in streamers or username not in streamers[channel_id]:
-        response = await ctx.send(f"❌ {username} n'est pas dans la liste !")
-        asyncio.create_task(delete_command_messages(ctx, response))
-        return
-
-    streamers[channel_id].remove(username)
-
-    message_key = f"{channel_id}_{username}"
-    if message_key in stream_messages:
-        try:
-            message_id = stream_messages[message_key]['message_id']
-            message = await ctx.channel.fetch_message(message_id)
-            await message.delete()
-        except:
-            pass
-        finally:
-            stream_messages.pop(message_key, None)
-            currently_live_streamers.pop(message_key, None)
-
-    response = await ctx.send(f"✅ {username} retiré de la liste des streamers surveillés !")
-    asyncio.create_task(delete_command_messages(ctx, response))
-
-@bot.command(name='liststreamer')
-async def list_streamers(ctx):
-    channel_id = ctx.channel.id
-
-    if channel_id not in streamers or not streamers[channel_id]:
-        await ctx.send("📋 Aucun streamer surveillé dans ce channel !")
-        return
-
-    embed = discord.Embed(
-        title="📋 Streamers surveillés",
-        description="\n".join(f"• {streamer}" for streamer in streamers[channel_id]),
-        color=0x9146ff
-    )
-    embed.set_footer(text="Mise à jour automatique toutes les 2 minutes")
-    await ctx.send(embed=embed)
-
-@bot.command(name='pingrole')
-@commands.has_permissions(manage_roles=True)
-async def set_ping_role(ctx, role: discord.Role = None):
-    channel_id = ctx.channel.id
-
-    if role is None:
-        if channel_id in ping_roles:
-            del ping_roles[channel_id]
-        await ctx.send("✅ Rôle de ping désactivé pour ce channel !")
-        return
-
-    ping_roles[channel_id] = role.id
-    await ctx.send(f"✅ Le rôle {role.mention} sera ping lors des notifications de stream !")
-
-@bot.command(name='reactionrole')
-@commands.has_permissions(manage_roles=True)
-async def create_reaction_role(ctx, role: discord.Role = None, emoji: str = "🔔"):
-    """Crée un message sur lequel les utilisateurs peuvent réagir pour obtenir un rôle"""
-    if role is None:
-        await ctx.send("❌ Veuillez spécifier un rôle !\nExemple: `!reactionrole @Notifications 🔔`")
-        return
-
-    embed = discord.Embed(
-        title="🎯 Rôle par Réaction",
-        description=f"Réagissez avec {emoji} pour obtenir le rôle **{role.name}**\n\nRéagissez à nouveau pour retirer le rôle.",
-        color=0x9146ff
-    )
-    embed.add_field(name="Rôle", value=role.mention, inline=True)
-    embed.add_field(name="Emoji", value=emoji, inline=True)
-    embed.set_footer(text="Système de rôles automatique")
-
-    try:
-        await ctx.message.delete()
-    except:
-        pass
-
-    message = await ctx.send(embed=embed)
-    await message.add_reaction(emoji)
-
-    reaction_role_messages[message.id] = {
-        'role_id': role.id,
-        'emoji': emoji,
-        'guild_id': ctx.guild.id
-    }
-
-    logger.info(f"Message de réaction créé pour le rôle {role.name} avec l'emoji {emoji}")
-
-@bot.event
-async def on_reaction_add(reaction, user):
-    """Gère l'ajout de réactions pour donner des rôles"""
-    if user.bot:
-        return
-
-    message_id = reaction.message.id
-    if message_id not in reaction_role_messages:
-        return
-
-    role_data = reaction_role_messages[message_id]
-    
-    if str(reaction.emoji) != role_data['emoji']:
-        return
-
-    guild = bot.get_guild(role_data['guild_id'])
-    if not guild:
-        return
-
-    role = guild.get_role(role_data['role_id'])
-    member = guild.get_member(user.id)
-
-    if not role or not member:
-        return
-
-    try:
-        await member.add_roles(role)
-        logger.info(f"Rôle {role.name} ajouté à {member.name}")
-    except discord.Forbidden:
-        logger.error(f"Pas de permission pour ajouter le rôle {role.name} à {member.name}")
-    except Exception as e:
-        logger.error(f"Erreur lors de l'ajout du rôle: {e}")
-
-@bot.event
-async def on_reaction_remove(reaction, user):
-    """Gère la suppression de réactions pour retirer des rôles"""
-    if user.bot:
-        return
-
-    message_id = reaction.message.id
-    if message_id not in reaction_role_messages:
-        return
-
-    role_data = reaction_role_messages[message_id]
-    
-    if str(reaction.emoji) != role_data['emoji']:
-        return
-
-    guild = bot.get_guild(role_data['guild_id'])
-    if not guild:
-        return
-
-    role = guild.get_role(role_data['role_id'])
-    member = guild.get_member(user.id)
-
-    if not role or not member:
-        return
-
-    try:
-        await member.remove_roles(role)
-        logger.info(f"Rôle {role.name} retiré de {member.name}")
-    except discord.Forbidden:
-        logger.error(f"Pas de permission pour retirer le rôle {role.name} de {member.name}")
-    except Exception as e:
-        logger.error(f"Erreur lors du retrait du rôle: {e}")
-
-# MODIFICATION: Remplacer !streamhelp par !help
-@bot.command(name='help')
-async def help_command(ctx):
-    """Commande d'aide personnalisée du bot"""
-    embed = discord.Embed(
-        title="🤖 Aide du Bot Twitch",
-        description="Voici toutes les commandes disponibles :",
-        color=0x9146ff
-    )
-    
-    embed.add_field(
-        name="📺 Gestion des Streamers", 
-        value="`!addstreamer <username>` - Ajouter un streamer\n"
-              "`!addstreamers <user1> <user2> ...` - Ajouter plusieurs streamers\n"
-              "`!removestreamer <username>` - Retirer un streamer\n"
-              "`!liststreamer` - Liste des streamers surveillés",
-        inline=False
-    )
-    
-    embed.add_field(
-        name="🔔 Notifications", 
-        value="`!pingrole [@role]` - Définir le rôle à ping\n"
-              "`!reactionrole [@role] [emoji]` - Créer un système de rôle par réaction",
-        inline=False
-    )
-    
-    embed.add_field(
-        name="🛠️ Administration", 
-        value="`!checkstreams` - Vérification manuelle des streams",
-        inline=False
-    )
-    
-    embed.add_field(
-        name="ℹ️ Informations", 
-        value="⏱️ Vérification automatique toutes les 2 minutes\n"
-              "🔄 Messages mis à jour en temps réel\n"
-              "🗑️ Nettoyage automatique des commandes",
-        inline=False
-    )
-    
-    embed.set_footer(text="💡 Utilisez les commandes avec le préfixe !")
-    
-    await ctx.send(embed=embed)
-
-# Test command pour vérifier que la vérification fonctionne
-@bot.command(name='checkstreams')
-@commands.has_permissions(manage_channels=True)
-async def manual_check_streams(ctx):
-    """Commande pour tester manuellement la vérification des streams"""
-    response = await ctx.send("🔍 Vérification manuelle des streams en cours...")
-    await check_streams()
-    await response.edit(content="✅ Vérification terminée ! Consultez les logs pour plus de détails.")
-    asyncio.create_task(delete_command_messages(ctx, response))
-
-@bot.event
-async def on_command_error(ctx, error):
-    if isinstance(error, commands.MissingPermissions):
-        response = await ctx.send("❌ Vous n'avez pas les permissions nécessaires pour cette commande !")
-        if ctx.command.name in ['addstreamer', 'removestreamer', 'addstreamers']:
-            asyncio.create_task(delete_command_messages(ctx, response))
-    elif isinstance(error, commands.BadArgument):
-        response = await ctx.send("❌ Argument invalide ! Utilisez `!help` pour voir les commandes.")
-        if ctx.command.name in ['addstreamer', 'removestreamer', 'addstreamers']:
-            asyncio.create_task(delete_command_messages(ctx, response))
-    elif isinstance(error, commands.MissingRequiredArgument):
-        response = await ctx.send("❌ Argument manquant ! Utilisez `!help` pour voir les commandes.")
-        if ctx.command.name in ['addstreamer', 'removestreamer', 'addstreamers']:
-            asyncio.create_task(delete_command_messages(ctx, response))
-    else:
-        logger.error(f"Erreur non gérée: {error}")
-
-@bot.event
-async def on_disconnect():
-    if check_streams.is_running():
-        check_streams.cancel()
-
-# === Lancement ===
+# === DÉMARRAGE ===
 if __name__ == "__main__":
-    Thread(target=run_flask).start()
-    token = os.getenv("DISCORD_BOT_TOKEN")
-    if not token:
-        print("❌ Le token Discord est manquant !")
-    else:
-        try:
-            print(f"🚀 Connexion avec le token: {token[:10]}...")
-            bot.run(token)
-        except discord.errors.LoginFailure:
-            print("❌ Token Discord invalide !")
-        except Exception as e:
-            logger.error(f"Erreur lors du lancement du bot: {e}")
+    # Démarrer Flask dans un thread séparé
+    flask_thread = Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    logger.info("Serveur Flask démarré")
+    
+    # Démarrer le bot Discord
+    TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+    if not TOKEN:
+        logger.error("❌ Token Discord manquant (DISCORD_BOT_TOKEN)")
+        exit(1)
+    
+    try:
+        bot.run(TOKEN)
+    except Exception as e:
+        logger.error(f"Erreur lors du démarrage du bot: {e}")
