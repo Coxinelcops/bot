@@ -127,6 +127,8 @@ event_id_counter = 1
 event_messages = {}
 notifications_sent = {}
 guild_role_configs = {}
+# Nouveau dictionnaire pour stocker les messages de notification à supprimer
+notification_messages = {}
 
 class Event:
     def __init__(self, id, name, date, creator, guild_id, channel_id, role_id=None, category=None, stream=None, lieu=None, image=None, description=None):
@@ -172,7 +174,16 @@ async def create_event(interaction: discord.Interaction, nom: str, date: str, st
     await interaction.response.send_message(embed=embed)
     event_messages[event_id_counter] = await interaction.original_response()
     notifications_sent[event_id_counter] = {"15min": False, "live": False}
+    notification_messages[event_id_counter] = []  # Liste pour stocker les messages de notification
     event_id_counter += 1
+
+# Fonction pour supprimer un message après un délai
+async def delete_message_after_delay(message, delay_minutes):
+    await asyncio.sleep(delay_minutes * 60)
+    try:
+        await message.delete()
+    except:
+        pass  # Ignore si le message est déjà supprimé ou inaccessible
 
 @tasks.loop(minutes=1)
 async def notification_system():
@@ -182,23 +193,52 @@ async def notification_system():
             continue
         delta = event.date - now
         minutes = int(delta.total_seconds() / 60)
+        
+        # Notification 15 minutes avant
         if minutes <= 15 and not notifications_sent[event_id]["15min"]:
-            await send_event_notification(event, 15)
+            notification_msg = await send_event_notification(event, 15)
+            if notification_msg:
+                notification_messages[event_id].append(notification_msg)
+                # Programmer la suppression du message de notification après 5 minutes
+                asyncio.create_task(delete_message_after_delay(notification_msg, 5))
             notifications_sent[event_id]["15min"] = True
+        
+        # Notification live (0 minute)
         elif minutes <= 0 and not notifications_sent[event_id]["live"]:
-            await send_event_notification(event, 0)
+            notification_msg = await send_event_notification(event, 0)
+            if notification_msg:
+                notification_messages[event_id].append(notification_msg)
+                # Programmer la suppression du message de notification après 5 minutes
+                asyncio.create_task(delete_message_after_delay(notification_msg, 5))
+                
+                # Programmer la suppression du message principal après 30 minutes
+                if event_id in event_messages:
+                    asyncio.create_task(delete_message_after_delay(event_messages[event_id], 30))
             notifications_sent[event_id]["live"] = True
-        elif delta.total_seconds() < -1800:
+        
+        # Nettoyage des événements passés (après 2 heures)
+        elif delta.total_seconds() < -7200:  # 2 heures après l'événement
+            # Supprimer le message principal s'il existe encore
             if event_id in event_messages:
-                try: await event_messages[event_id].delete()
-                except: pass
+                try: 
+                    await event_messages[event_id].delete()
+                except: 
+                    pass
                 del event_messages[event_id]
-            del events[event_id]
-            del notifications_sent[event_id]
+            
+            # Nettoyer les données
+            if event_id in events:
+                del events[event_id]
+            if event_id in notifications_sent:
+                del notifications_sent[event_id]
+            if event_id in notification_messages:
+                del notification_messages[event_id]
 
 async def send_event_notification(event, minutes_before):
     channel = bot.get_channel(event.channel_id)
-    if not channel: return
+    if not channel: 
+        return None
+    
     if minutes_before == 0:
         title = f"🔴 LIVE MAINTENANT - {event.name}"
         color = 0xFF0000
@@ -207,6 +247,7 @@ async def send_event_notification(event, minutes_before):
         title = f"⏰ {event.name} - dans {minutes_before} minutes"
         color = 0xFFA500
         msg = f"L'événement commence dans {minutes_before} minutes !"
+    
     embed = discord.Embed(title=title, description=msg, color=color, timestamp=get_current_time())
     embed.add_field(name="📅 Heure", value=format_date(event.date), inline=True)
     if event.lieu:
@@ -215,12 +256,18 @@ async def send_event_notification(event, minutes_before):
         embed.add_field(name="📺 Stream", value=event.stream, inline=False)
     if event.image:
         embed.set_image(url=event.image)
+    
     content = ""
     if event.role_id:
         role = channel.guild.get_role(event.role_id)
         if role:
             content = role.mention
-    await channel.send(content=content, embed=embed)
+    
+    try:
+        sent_message = await channel.send(content=content, embed=embed)
+        return sent_message
+    except:
+        return None
 
 @bot.event
 async def on_ready():
