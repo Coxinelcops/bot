@@ -310,7 +310,7 @@ async def create_event(
             )
             return
         
-        # MAINTENANT qu'on a validé, on peut defer
+        # Maintenant qu'on a validé, on peut defer
         await interaction.response.defer()
         
         # Si aucun rôle n'est spécifié, essayer de le trouver automatiquement par catégorie
@@ -549,7 +549,7 @@ async def show_config(interaction: discord.Interaction):
 
 @bot.tree.command(name="event-list", description="Afficher tous les événements")
 async def list_events(interaction: discord.Interaction):
-    # Répondre immédiatement avec defer
+    # Répondre immédiatement
     await interaction.response.defer()
     
     guild_events = [event for event in events.values() if event.guild_id == interaction.guild_id]
@@ -678,48 +678,8 @@ async def add_streamer(interaction: discord.Interaction, usernames: str):
     if not interaction.user.guild_permissions.manage_channels:
         await interaction.response.send_message("❌ Vous n'avez pas les permissions pour gérer les streamers!", ephemeral=True)
         return
-
-    # Nettoyer les noms d'utilisateur
-    username_list = [u.lower().replace('@', '').strip() for u in usernames.split() if u.strip()]
-    if not username_list:
-        await interaction.response.send_message("❌ Veuillez fournir au moins un nom d'utilisateur valide!", ephemeral=True)
-        return
-
-    # Defer la réponse APRÈS la validation
-    await interaction.response.defer(ephemeral=True)
-
+    
     channel_id = interaction.channel_id
-
-    if channel_id not in streamers:
-        streamers[channel_id] = []
-
-    added = []
-    already_exists = []
-
-    for username in username_list:
-        if username in streamers[channel_id]:
-            already_exists.append(username)
-        else:
-            streamers[channel_id].append(username)
-            added.append(username)
-
-    response_parts = []
-    if added:
-        response_parts.append(f"✅ **Ajouté{'s' if len(added) > 1 else ''} :** {', '.join(added)}")
-    if already_exists:
-        response_parts.append(f"⚠️ **Déjà suivi{'s' if len(already_exists) > 1 else ''} :** {', '.join(already_exists)}")
-    if not added and already_exists:
-        response_parts = ["⚠️ Tous les streamers sont déjà suivis dans ce salon!"]
-
-    await interaction.followup.send('\n'.join(response_parts))
-
-
-@bot.tree.command(name="twitchremove", description="Retirer un ou plusieurs streamers de la liste")
-@app_commands.describe(usernames="Noms d'utilisateur Twitch à retirer, séparés par des espaces")
-async def remove_streamer(interaction: discord.Interaction, usernames: str):
-    if not interaction.user.guild_permissions.manage_channels:
-        await interaction.response.send_message("❌ Vous n'avez pas les permissions pour gérer les streamers!", ephemeral=True)
-        return
     
     # Séparer les noms d'utilisateur et les nettoyer
     username_list = [username.lower().replace('@', '').strip() for username in usernames.split()]
@@ -729,14 +689,53 @@ async def remove_streamer(interaction: discord.Interaction, usernames: str):
         await interaction.response.send_message("❌ Veuillez fournir au moins un nom d'utilisateur valide!", ephemeral=True)
         return
     
+    if channel_id not in streamers:
+        streamers[channel_id] = []
+    
+    added = []
+    already_exists = []
+    
+    for username in username_list:
+        if username in streamers[channel_id]:
+            already_exists.append(username)
+        else:
+            streamers[channel_id].append(username)
+            added.append(username)
+    
+    # Construire le message de réponse
+    response_parts = []
+    
+    if added:
+        response_parts.append(f"✅ **Ajouté{'s' if len(added) > 1 else ''}:** {', '.join(added)}")
+    
+    if already_exists:
+        response_parts.append(f"⚠️ **Déjà suivi{'s' if len(already_exists) > 1 else ''}:** {', '.join(already_exists)}")
+    
+    if not added and already_exists:
+        response_parts = [f"⚠️ Tous les streamers sont déjà suivis dans ce salon!"]
+    
+    await interaction.response.send_message('\n'.join(response_parts))
+
+@bot.tree.command(name="twitchremove", description="Retirer un ou plusieurs streamers de la liste")
+@app_commands.describe(usernames="Noms d'utilisateur Twitch à retirer, séparés par des espaces")
+async def remove_streamer(interaction: discord.Interaction, usernames: str):
+    if not interaction.user.guild_permissions.manage_channels:
+        await interaction.response.send_message("❌ Vous n'avez pas les permissions pour gérer les streamers!", ephemeral=True)
+        return
+    
     channel_id = interaction.channel_id
+    
+    # Séparer les noms d'utilisateur et les nettoyer
+    username_list = [username.lower().replace('@', '').strip() for username in usernames.split()]
+    username_list = [username for username in username_list if username]  # Supprimer les chaînes vides
+    
+    if not username_list:
+        await interaction.response.send_message("❌ Veuillez fournir au moins un nom d'utilisateur valide!", ephemeral=True)
+        return
     
     if channel_id not in streamers or not streamers[channel_id]:
         await interaction.response.send_message("❌ Aucun streamer n'est suivi dans ce salon!", ephemeral=True)
         return
-    
-    # Defer APRÈS les validations
-    await interaction.response.defer()
     
     removed = []
     not_found = []
@@ -762,11 +761,11 @@ async def remove_streamer(interaction: discord.Interaction, usernames: str):
     if not_found:
         response_parts.append(f"❌ **Non trouvé{'s' if len(not_found) > 1 else ''}:** {', '.join(not_found)}")
     
-    await interaction.followup.send('\n'.join(response_parts))
+    await interaction.response.send_message('\n'.join(response_parts))
 
 @bot.tree.command(name="twitchlist", description="Voir la liste des streamers suivis")
 async def list_streamers(interaction: discord.Interaction):
-    # Répondre immédiatement avec defer
+    # Répondre immédiatement
     await interaction.response.defer()
     
     channel_id = interaction.channel_id
