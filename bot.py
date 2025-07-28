@@ -1137,7 +1137,21 @@ if __name__ == '__main__':
     token = os.getenv("DISCORD_TOKEN")
     if token:
         try:
-            bot.run(token)
+            
+
+@bot.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error):
+    print(f"❌ Erreur de slash commande: {error}")
+    try:
+        if not interaction.response.is_done():
+            await interaction.response.send_message("❌ Une erreur est survenue lors de l'exécution de la commande.", ephemeral=True)
+        else:
+            await interaction.followup.send("❌ Une erreur est survenue lors de l'exécution de la commande.", ephemeral=True)
+    except Exception as e:
+        print(f"Erreur lors de l'envoi du message d'erreur: {e}")
+
+
+    bot.run(token)
         except Exception as e:
             print(f"❌ Erreur lors du démarrage du bot: {e}")
     else:
