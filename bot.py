@@ -37,7 +37,14 @@ def format_date(date):
     return f"{days[date.weekday()]} {date.day} {months[date.month - 1]} {date.year} à {date.strftime('%H:%M')}"
 
 # === FLASK (render) ===
+web_server_started = False
+
 async def start_web_server():
+    global web_server_started
+    if web_server_started:
+        print("🌐 Serveur web déjà démarré. Ignoré.")
+        return
+    web_server_started = True
     async def health_check(request):
         return web.Response(text="Bot Discord actif ✅", status=200)
     app = web.Application()
@@ -45,7 +52,9 @@ async def start_web_server():
     app.router.add_get('/health', health_check)
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, '0.0.0.0', int(os.getenv('PORT', 8080)))
+    port = int(os.getenv("PORT", 8080))
+    print(f"🌐 Tentative de démarrage du serveur web sur le port {port}")
+    site = web.TCPSite(runner, '0.0.0.0', port)
     await site.start()
     print(f"🌐 Serveur web démarré sur le port {os.getenv('PORT', 8080)}")
 
