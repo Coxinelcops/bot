@@ -870,47 +870,37 @@ async def help_command(interaction: discord.Interaction):
         color=0x00AE86,
         timestamp=get_current_time()
     )
-""",         color=0x00AE86,         timestamp=get_current_time()     )          # Événements     events_commands ="""
-`/event-create` - Créer un nouvel événement
+""",         color=0x00AE86,         timestamp=get_current_time()     )          # Événements     events_commands ="""`/event-create` - Créer un nouvel événement
 `/event-list` - Afficher tous les événements
 `/event-info <id>` - Détails d'un événement
-`/event-delete <id>` - Supprimer un événement 🔒
-    """
+`/event-delete <id>` - Supprimer un événement 🔒"""
     embed.add_field(name="🎉 **Événements**", value=events_commands.strip(), inline=False)
     
     # Configuration
-    config_commands = """
-`/config-roles` - Configurer les rôles par catégorie 🔒
-`/show-config` - Afficher la configuration des rôles
-    """
+    config_commands = """`/config-roles` - Configurer les rôles par catégorie 🔒
+`/show-config` - Afficher la configuration des rôles"""
     embed.add_field(name="⚙️ **Configuration**", value=config_commands.strip(), inline=False)
     
     # Twitch
-    twitch_commands = """
-`/twitchadd <streamers>` - Ajouter streamer(s) à suivre 🔒
+    twitch_commands = """`/twitchadd <streamers>` - Ajouter streamer(s) à suivre 🔒
 `/twitchremove <streamers>` - Retirer streamer(s) 🔒
 `/twitchlist` - Voir les streamers suivis
 `/twitchclear` - Vider la liste des streamers 🔒
-`/pingrole <role>` - Configurer le rôle à ping pour les lives 🔒
-    """
+`/pingrole <role>` - Configurer le rôle à ping pour les lives 🔒"""
     embed.add_field(name="📺 **Twitch**", value=twitch_commands.strip(), inline=False)
     
     # Notifications
-    notification_commands = """
-`/notification-status` - Statut des notifications
+    notification_commands = """`/notification-status` - Statut des notifications
 `/restart-notifications` - Redémarrer le système 👑
 `/check-notifications` - Forcer une vérification 👑
-`/test-notification <id>` - Tester une notification 👑
-    """
+`/test-notification <id>` - Tester une notification 👑"""
     embed.add_field(name="🔔 **Notifications**", value=notification_commands.strip(), inline=False)
     
     # Administration
-    admin_commands = """
-`/sync-commands` - Synchroniser les commandes 👑
+    admin_commands = """`/sync-commands` - Synchroniser les commandes 👑
 `/debug-bot` - Informations de debug 👑
 `/ping` - Tester la connexion
-`/helpalpine` - Afficher cette aide
-    """
+`/helpalpine` - Afficher cette aide"""
     embed.add_field(name="🔧 **Administration**", value=admin_commands.strip(), inline=False)
     
     # Légende
