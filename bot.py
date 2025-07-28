@@ -112,7 +112,6 @@ class TwitchAPI:
 
 twitch_api = TwitchAPI()
 
-
 @tasks.loop(minutes=2)
 async def check_streams():
     for channel_id, streamer_list in streamers.items():
@@ -139,7 +138,6 @@ async def check_streams():
             ping_content = f"<@&{ping_roles.get(channel_id)}>" if ping_roles.get(channel_id) else None
             msg = await channel.send(content=ping_content, embed=embed)
             stream_messages[key] = {'message_id': msg.id, 'last_update': datetime.now(UTC).timestamp()}
-
 
 @check_streams.before_loop
 async def before_check(): await bot.wait_until_ready()
@@ -837,6 +835,18 @@ async def clear_streamers(interaction: discord.Interaction):
     
     await interaction.response.send_message(f"✅ Liste vidée! **{count}** streamer(s) retiré(s) de ce salon.")
 
+@bot.tree.command(name="pingrole", description="Associer un rôle à ping quand un stream est en live dans ce salon")
+@app_commands.describe(role="Rôle à mentionner")
+async def set_ping_role(interaction: discord.Interaction, role: discord.Role):
+    if not interaction.user.guild_permissions.manage_channels:
+        await interaction.response.send_message("❌ Vous n'avez pas la permission!", ephemeral=True)
+        return
+    try:
+        ping_roles[interaction.channel_id] = role.id
+        await interaction.response.send_message(f"✅ Le rôle {role.mention} sera ping lorsque quelqu'un sera en live dans ce salon.", ephemeral=True)
+    except Exception as e:
+        await interaction.response.send_message(f"❌ Erreur : {e}", ephemeral=True)
+
 # === COMMANDE HELP ===
 
 @bot.tree.command(name="helpalpine", description="Afficher toutes les commandes disponibles")
@@ -870,6 +880,7 @@ async def help_command(interaction: discord.Interaction):
 `/twitchremove <streamers>` - Retirer streamer(s) 🔒
 `/twitchlist` - Voir les streamers suivis
 `/twitchclear` - Vider la liste des streamers 🔒
+`/pingrole <role>` - Configurer le rôle à ping pour les lives 🔒
     """
     embed.add_field(name="📺 **Twitch**", value=twitch_commands.strip(), inline=False)
     
@@ -886,6 +897,7 @@ async def help_command(interaction: discord.Interaction):
     admin_commands = """
 `/sync-commands` - Synchroniser les commandes 👑
 `/debug-bot` - Informations de debug 👑
+`/ping` - Tester la connexion
 `/helpalpine` - Afficher cette aide
     """
     embed.add_field(name="🔧 **Administration**", value=admin_commands.strip(), inline=False)
@@ -1065,6 +1077,10 @@ async def debug_bot(interaction: discord.Interaction):
     
     await interaction.response.send_message(debug_info, ephemeral=True)
 
+@bot.tree.command(name="ping", description="Réponds pong")
+async def ping(interaction: discord.Interaction):
+    await interaction.response.send_message("🏓 Pong !")
+
 # === EVENTS DU BOT ===
 
 @bot.event
@@ -1132,22 +1148,6 @@ async def on_error(event, *args, **kwargs):
 async def on_command_error(ctx, error):
     print(f"Erreur de commande: {error}")
 
-# === DÉMARRAGE ===
-if __name__ == '__main__':
-    token = os.getenv("DISCORD_TOKEN")
-    if token:
-        try:
-            
-
-")
-
-
-    
-
-")
-
-
-    
 @bot.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error):
     print(f"❌ Erreur de slash commande: {error}")
@@ -1159,32 +1159,13 @@ async def on_app_command_error(interaction: discord.Interaction, error):
     except Exception as e:
         print(f"Erreur lors de l'envoi du message d'erreur: {e}")
 
-
-    bot.run(token)
+# === DÉMARRAGE ===
+if __name__ == '__main__':
+    token = os.getenv("DISCORD_TOKEN")
+    if token:
+        try:
+            bot.run(token)
         except Exception as e:
             print(f"❌ Erreur lors du démarrage du bot: {e}")
     else:
         print("❌ DISCORD_TOKEN manquant dans les variables d'environnement!")
-
-
-
-
-@bot.tree.command(name="pingrole", description="Associer un rôle à ping quand un stream est en live dans ce salon")
-@app_commands.describe(role="Rôle à mentionner")
-async def set_ping_role(interaction: discord.Interaction, role: discord.Role):
-    if not interaction.user.guild_permissions.manage_channels:
-        await interaction.response.send_message("❌ Vous n'avez pas la permission!", ephemeral=True)
-        return
-    try:
-        ping_roles[interaction.channel_id] = role.id
-        await interaction.response.send_message(f"✅ Le rôle {role.mention} sera ping lorsque quelqu'un sera en live dans ce salon.", ephemeral=True)
-    except Exception as e:
-        await interaction.response.send_message(f"❌ Erreur : {e}", ephemeral=True)
-
-
-
-
-
-@bot.tree.command(name="ping", description="Réponds pong")
-async def ping(interaction: discord.Interaction):
-    await interaction.response.send_message("🏓 Pong !")
