@@ -1154,4 +1154,12 @@ async def set_ping_role(interaction: discord.Interaction, role: discord.Role):
 
     ping_roles[interaction.channel_id] = role.id
     await interaction.response.send_message(f"✅ Le rôle {role.mention} sera ping lorsque quelqu'un sera en live dans ce salon.", ephemeral=True)
+    except Exception as e:
+        await interaction.response.send_message(f"❌ Erreur : {e}", ephemeral=True)
 
+
+
+
+@bot.tree.command(name="ping", description="Réponds pong")
+async def ping(interaction: discord.Interaction):
+    await interaction.response.send_message("🏓 Pong !")
