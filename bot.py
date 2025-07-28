@@ -173,6 +173,16 @@ async def check_streams():
                 msg = await channel.send(content=ping_content, embed=embed)
                 stream_messages[key] = {'message_id': msg.id, 'last_update': datetime.now(UTC).timestamp()}
 
+@check_streams.before_loop
+async def before_check(): await bot.wait_until_ready()
+
+# === EVENTS ===
+events = {}
+event_id_counter = 1
+event_messages = {}
+notifications_sent = {}
+guild_role_configs = {}
+notification_messages = {}
 
 class Event:
     def __init__(self, id, name, date, creator, guild_id, channel_id, role_id=None, category=None, stream=None, lieu=None, image=None, description=None):
