@@ -1145,17 +1145,19 @@ if __name__ == '__main__':
 
 
 
+
 @bot.tree.command(name="pingrole", description="Associer un rôle à ping quand un stream est en live dans ce salon")
 @app_commands.describe(role="Rôle à mentionner")
 async def set_ping_role(interaction: discord.Interaction, role: discord.Role):
     if not interaction.user.guild_permissions.manage_channels:
         await interaction.response.send_message("❌ Vous n'avez pas la permission!", ephemeral=True)
         return
-
-    ping_roles[interaction.channel_id] = role.id
-    await interaction.response.send_message(f"✅ Le rôle {role.mention} sera ping lorsque quelqu'un sera en live dans ce salon.", ephemeral=True)
+    try:
+        ping_roles[interaction.channel_id] = role.id
+        await interaction.response.send_message(f"✅ Le rôle {role.mention} sera ping lorsque quelqu'un sera en live dans ce salon.", ephemeral=True)
     except Exception as e:
         await interaction.response.send_message(f"❌ Erreur : {e}", ephemeral=True)
+
 
 
 
