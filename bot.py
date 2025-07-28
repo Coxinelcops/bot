@@ -571,7 +571,9 @@ async def list_events(interaction: discord.Interaction):
     await interaction.response.defer()
     
     guild_events = [event for event in events.values() if event.guild_id == interaction.guild_id]
-    guild_events.sort(key=lambda x: x.date)
+    guild_events.sort(key=lambda x:
+    await interaction.response.defer()
+ x.date)
     
     if not guild_events:
         await interaction.followup.send(
@@ -790,6 +792,8 @@ async def list_streamers(interaction: discord.Interaction):
     channel_id = interaction.channel_id
     
     if channel_id not in streamers or not streamers[channel_id]:
+    await interaction.response.defer()
+
         await interaction.followup.send("📺 Aucun streamer suivi dans ce salon.")
         return
     
@@ -862,7 +866,9 @@ async def set_ping_role(interaction: discord.Interaction, role: discord.Role):
 async def help_command(interaction: discord.Interaction):
     embed = discord.Embed(
         title="📋 Guide des Commandes - Bot Alpine",
-        description="Voici toutes les commandes disponibles organisées par catégorie :",
+        description="Voici toutes les commandes disponibles organisées par catégorie :
+    await interaction.response.defer()
+",
         color=0x00AE86,
         timestamp=get_current_time()
     )
@@ -1094,6 +1100,8 @@ async def ping(interaction: discord.Interaction):
 
 @bot.event
 async def on_ready():
+    await interaction.response.defer()
+
     print(f"✅ Connecté en tant que {bot.user}")
     
     try:
