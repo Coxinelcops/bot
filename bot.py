@@ -1,4 +1,4 @@
-# bot_minimal_debug.py - Version ultra-simple pour diagnostic
+# bot_fix_sync.py - Version avec synchronisation forcée
 
 import discord
 from discord.ext import commands
@@ -7,172 +7,165 @@ import asyncio
 import os
 import logging
 
-# Configuration du logging pour voir TOUT ce qui se passe
+# Configuration du logging
 logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
 )
 
-print("🔄 Démarrage du script...")
+print("🔄 Démarrage du bot...")
 
-# Intents minimaux
+# Intents
 intents = discord.Intents.default()
 intents.message_content = True
 
-# Bot avec prefix minimal
+# Bot
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-print("✅ Bot créé avec succès")
-
-# === COMMANDE ULTRA-SIMPLE ===
-@bot.tree.command(name="test", description="Test ultra-simple")
+# === COMMANDES ===
+@bot.tree.command(name="test", description="Commande de test")
 async def test_command(interaction: discord.Interaction):
-    """Commande la plus simple possible"""
-    print(f"🎯 COMMANDE REÇUE de {interaction.user} dans {interaction.guild}")
-    print(f"🎯 Type interaction: {type(interaction)}")
-    print(f"🎯 Interaction ID: {interaction.id}")
-    
-    try:
-        print("🔄 Tentative de réponse...")
-        await interaction.response.send_message("✅ Bot fonctionnel!")
-        print("✅ Réponse envoyée avec succès!")
-    except Exception as e:
-        print(f"❌ Erreur lors de la réponse: {e}")
-        print(f"❌ Type d'erreur: {type(e)}")
-        import traceback
-        traceback.print_exc()
+    """Commande de test simple"""
+    print(f"✅ Commande /test reçue de {interaction.user}")
+    await interaction.response.send_message("🎉 Le bot fonctionne parfaitement !")
 
-@bot.tree.command(name="debug", description="Informations de debug")
-async def debug_command(interaction: discord.Interaction):
-    """Commande de debug"""
-    print(f"🔍 DEBUG demandé par {interaction.user}")
+@bot.tree.command(name="ping", description="Test de latence")
+async def ping_command(interaction: discord.Interaction):
+    """Test de ping"""
+    latency = round(bot.latency * 1000)
+    print(f"✅ Commande /ping reçue - Latence: {latency}ms")
+    await interaction.response.send_message(f"🏓 Pong! Latence: {latency}ms")
+
+@bot.tree.command(name="info", description="Informations du bot")
+async def info_command(interaction: discord.Interaction):
+    """Informations du bot"""
+    embed = discord.Embed(
+        title="ℹ️ Informations du Bot",
+        color=0x00ff00
+    )
+    embed.add_field(name="Nom", value=bot.user.name, inline=True)
+    embed.add_field(name="ID", value=bot.user.id, inline=True)
+    embed.add_field(name="Latence", value=f"{round(bot.latency * 1000)}ms", inline=True)
+    embed.add_field(name="Serveur", value=interaction.guild.name, inline=True)
+    embed.add_field(name="Utilisateur", value=interaction.user.display_name, inline=True)
     
-    try:
-        info = f"""
-**Debug Info:**
-- Bot User: {bot.user}
-- Bot ID: {bot.user.id}
-- Latence: {round(bot.latency * 1000)}ms
-- Serveur: {interaction.guild.name}
-- Channel: {interaction.channel.name}
-- User: {interaction.user}
-"""
-        await interaction.response.send_message(info)
-        print("✅ Debug envoyé")
-    except Exception as e:
-        print(f"❌ Erreur debug: {e}")
-        import traceback
-        traceback.print_exc()
+    await interaction.response.send_message(embed=embed)
 
 # === ÉVÉNEMENTS ===
 @bot.event
 async def on_ready():
     print(f"🟢 Bot connecté: {bot.user} (ID: {bot.user.id})")
-    print(f"🔗 Serveurs: {len(bot.guilds)}")
+    print(f"📊 Connecté à {len(bot.guilds)} serveur(s)")
     
+    # Afficher les serveurs
     for guild in bot.guilds:
-        print(f"  - {guild.name} (ID: {guild.id})")
+        print(f"  🏠 {guild.name} (ID: {guild.id}) - {guild.member_count} membres")
+    
+    # SYNCHRONISATION FORCÉE DES COMMANDES
+    print("\n🔄 === SYNCHRONISATION DES COMMANDES ===")
     
     try:
-        print("🔄 Synchronisation des commandes...")
-        
-        # Test 1: Sync global
-        synced_global = await bot.tree.sync()
-        print(f"✅ Sync global: {len(synced_global)} commandes")
-        
-        for cmd in synced_global:
+        # 1. Vérifier que les commandes sont bien enregistrées
+        print(f"📋 Commandes enregistrées dans le bot: {len(bot.tree.get_commands())}")
+        for cmd in bot.tree.get_commands():
             print(f"  - {cmd.name}: {cmd.description}")
         
-        # Test 2: Sync spécifique pour chaque serveur
+        if len(bot.tree.get_commands()) == 0:
+            print("❌ PROBLÈME: Aucune commande trouvée dans bot.tree!")
+            return
+        
+        # 2. Synchronisation globale
+        print("🌍 Synchronisation globale...")
+        synced_global = await bot.tree.sync()
+        print(f"✅ Synchronisation globale: {len(synced_global)} commandes")
+        
+        # 3. Synchronisation par serveur (plus rapide)
         for guild in bot.guilds:
+            print(f"🏠 Synchronisation pour {guild.name}...")
             try:
-                guild_obj = discord.Object(id=guild.id)
-                synced_guild = await bot.tree.sync(guild=guild_obj)
-                print(f"✅ Sync {guild.name}: {len(synced_guild)} commandes")
+                # Copier les commandes globales vers le serveur
+                bot.tree.copy_global_to(guild=guild)
+                synced_guild = await bot.tree.sync(guild=guild)
+                print(f"✅ {guild.name}: {len(synced_guild)} commandes synchronisées")
+                
+                # Afficher les commandes synced
+                for cmd in synced_guild:
+                    print(f"    - /{cmd.name}")
+                    
             except Exception as e:
                 print(f"❌ Erreur sync {guild.name}: {e}")
         
-        print("🚀 Bot prêt! Testez /test")
+        print("\n🚀 === SYNCHRONISATION TERMINÉE ===")
+        print("💡 Les commandes peuvent prendre quelques minutes à apparaître dans Discord")
+        print("🔍 Commandes disponibles: /test, /ping, /info")
         
     except Exception as e:
-        print(f"❌ Erreur lors de la synchronisation: {e}")
+        print(f"❌ ERREUR LORS DE LA SYNCHRONISATION: {e}")
         import traceback
         traceback.print_exc()
 
-@bot.event
-async def on_guild_join(guild):
-    print(f"✅ Rejoint: {guild.name} (ID: {guild.id})")
-
-@bot.event
+@bot.event 
 async def on_interaction(interaction):
-    """Capturer TOUTES les interactions"""
-    print(f"🎯 INTERACTION REÇUE!")
-    print(f"  Type: {interaction.type}")
-    print(f"  User: {interaction.user}")
-    print(f"  Guild: {interaction.guild}")
-    print(f"  Channel: {interaction.channel}")
-    
+    """Capturer toutes les interactions pour debug"""
     if interaction.type == discord.InteractionType.application_command:
-        print(f"  Commande: {interaction.data.get('name', 'INCONNUE')}")
+        cmd_name = interaction.data.get('name', 'INCONNUE')
+        print(f"🎯 Interaction reçue: /{cmd_name} de {interaction.user}")
 
 @bot.event
 async def on_application_command_error(interaction, error):
-    print(f"❌❌❌ ERREUR DE COMMANDE SLASH ❌❌❌")
-    print(f"Commande: {interaction.command.name if interaction.command else 'INCONNUE'}")
-    print(f"User: {interaction.user}")
-    print(f"Guild: {interaction.guild}")
-    print(f"Erreur: {error}")
-    print(f"Type erreur: {type(error)}")
-    
-    import traceback
-    traceback.print_exc()
-    
+    """Gestion des erreurs de commandes"""
+    print(f"❌ Erreur commande: {error}")
     try:
         if not interaction.response.is_done():
             await interaction.response.send_message(f"❌ Erreur: {error}", ephemeral=True)
-        else:
-            await interaction.followup.send(f"❌ Erreur: {error}", ephemeral=True)
-    except Exception as send_error:
-        print(f"❌ Impossible d'envoyer l'erreur: {send_error}")
+    except:
+        pass
 
-@bot.event
-async def on_error(event, *args, **kwargs):
-    print(f"❌❌❌ ERREUR GÉNÉRALE ❌❌❌")
-    print(f"Event: {event}")
-    print(f"Args: {args}")
-    print(f"Kwargs: {kwargs}")
-    import traceback
-    traceback.print_exc()
+# === COMMANDE MANUELLE DE SYNC ===
+@bot.command(name='sync')
+async def sync_commands(ctx):
+    """Commande prefix pour forcer la sync (backup)"""
+    if ctx.author.guild_permissions.administrator:
+        print("🔄 Synchronisation manuelle demandée...")
+        try:
+            # Sync global
+            synced = await bot.tree.sync()
+            await ctx.send(f"✅ {len(synced)} commandes synchronisées globalement!")
+            
+            # Sync guild
+            if ctx.guild:
+                bot.tree.copy_global_to(guild=ctx.guild)
+                synced_guild = await bot.tree.sync(guild=ctx.guild)
+                await ctx.send(f"✅ {len(synced_guild)} commandes synchronisées pour ce serveur!")
+                
+        except Exception as e:
+            await ctx.send(f"❌ Erreur: {e}")
+    else:
+        await ctx.send("❌ Permissions administrateur requises!")
 
 # === DÉMARRAGE ===
 async def main():
-    print("🔄 Fonction main() démarrée")
-    
-    # Vérifier le token
     token = os.getenv("DISCORD_TOKEN")
     if not token:
         print("❌ DISCORD_TOKEN manquant!")
         return
     
-    print(f"✅ Token trouvé (longueur: {len(token)})")
-    print(f"✅ Token commence par: {token[:10]}...")
+    print(f"🔑 Token trouvé (longueur: {len(token)})")
     
     try:
-        print("🔄 Tentative de connexion...")
+        # Démarrage avec gestion propre
         async with bot:
+            print("🔄 Connexion au bot...")
             await bot.start(token)
     except Exception as e:
-        print(f"❌ Erreur de connexion: {e}")
+        print(f"❌ Erreur de démarrage: {e}")
         import traceback
         traceback.print_exc()
 
 if __name__ == '__main__':
-    print("🚀 Script lancé directement")
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("\n🛑 Arrêt manuel")
+        print("\n🛑 Bot arrêté")
     except Exception as e:
         print(f"❌ Erreur fatale: {e}")
-        import traceback
-        traceback.print_exc()
