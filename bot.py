@@ -37,14 +37,7 @@ def format_date(date):
     return f"{days[date.weekday()]} {date.day} {months[date.month - 1]} {date.year} à {date.strftime('%H:%M')}"
 
 # === FLASK (render) ===
-web_server_started = False
-
 async def start_web_server():
-    global web_server_started
-    if web_server_started:
-        print("🌐 Serveur web déjà démarré. Ignoré.")
-        return
-    web_server_started = True
     async def health_check(request):
         return web.Response(text="Bot Discord actif ✅", status=200)
     app = web.Application()
@@ -52,9 +45,7 @@ async def start_web_server():
     app.router.add_get('/health', health_check)
     runner = web.AppRunner(app)
     await runner.setup()
-    port = int(os.getenv("PORT", 8080))
-    print(f"🌐 Tentative de démarrage du serveur web sur le port {port}")
-    site = web.TCPSite(runner, '0.0.0.0', port)
+    site = web.TCPSite(runner, '0.0.0.0', int(os.getenv('PORT', 8080)))
     await site.start()
     print(f"🌐 Serveur web démarré sur le port {os.getenv('PORT', 8080)}")
 
@@ -135,17 +126,8 @@ async def check_streams():
             key = f"{channel_id}_{username}"
             if key in stream_messages:
                 continue  # already live
-            embed = discord.Embed(
-                title=f"🔴 {stream['user_name']} est en live !",
-                description=stream['title'],
-                url=f"https://twitch.tv/{username}",
-                color=0x9146ff
-            )
-            thumbnail_url = stream.get('thumbnail_url', '').replace('{width}', '1280').replace('{height}', '720')
-            if thumbnail_url:
-                embed.set_image(url=thumbnail_url)
-            ping_content = f"<@&{ping_roles.get(channel_id)}>" if ping_roles.get(channel_id) else None
-            msg = await channel.send(content=ping_content, embed=embed)
+            embed = discord.Embed(title=f"🔴 {stream['user_name']} est en live !", description=stream['title'], url=f"https://twitch.tv/{username}", color=0x9146ff)
+            msg = await channel.send(embed=embed)
             stream_messages[key] = {'message_id': msg.id, 'last_update': datetime.now(UTC).timestamp()}
 
 @check_streams.before_loop
@@ -571,9 +553,7 @@ async def list_events(interaction: discord.Interaction):
     await interaction.response.defer()
     
     guild_events = [event for event in events.values() if event.guild_id == interaction.guild_id]
-    guild_events.sort(key=lambda x:
-    await interaction.response.defer()
- x.date)
+    guild_events.sort(key=lambda x: x.date)
     
     if not guild_events:
         await interaction.followup.send(
@@ -792,8 +772,6 @@ async def list_streamers(interaction: discord.Interaction):
     channel_id = interaction.channel_id
     
     if channel_id not in streamers or not streamers[channel_id]:
-    await interaction.response.defer()
-
         await interaction.followup.send("📺 Aucun streamer suivi dans ce salon.")
         return
     
@@ -848,59 +826,57 @@ async def clear_streamers(interaction: discord.Interaction):
     
     await interaction.response.send_message(f"✅ Liste vidée! **{count}** streamer(s) retiré(s) de ce salon.")
 
-@bot.tree.command(name="pingrole", description="Associer un rôle à ping quand un stream est en live dans ce salon")
-@app_commands.describe(role="Rôle à mentionner")
-async def set_ping_role(interaction: discord.Interaction, role: discord.Role):
-    if not interaction.user.guild_permissions.manage_channels:
-        await interaction.response.send_message("❌ Vous n'avez pas la permission!", ephemeral=True)
-        return
-    try:
-        ping_roles[interaction.channel_id] = role.id
-        await interaction.response.send_message(f"✅ Le rôle {role.mention} sera ping lorsque quelqu'un sera en live dans ce salon.", ephemeral=True)
-    except Exception as e:
-        await interaction.response.send_message(f"❌ Erreur : {e}", ephemeral=True)
-
 # === COMMANDE HELP ===
 
 @bot.tree.command(name="helpalpine", description="Afficher toutes les commandes disponibles")
 async def help_command(interaction: discord.Interaction):
     embed = discord.Embed(
         title="📋 Guide des Commandes - Bot Alpine",
-        description="""Voici toutes les commandes disponibles organisées par catégorie :""",
+        description="Voici toutes les commandes disponibles organisées par catégorie :",
         color=0x00AE86,
         timestamp=get_current_time()
     )
-""",         color=0x00AE86,         timestamp=get_current_time()     )          # Événements     events_commands ="""`/event-create` - Créer un nouvel événement
+    
+    # Événements
+    events_commands = """
+`/event-create` - Créer un nouvel événement
 `/event-list` - Afficher tous les événements
 `/event-info <id>` - Détails d'un événement
-`/event-delete <id>` - Supprimer un événement 🔒"""
+`/event-delete <id>` - Supprimer un événement 🔒
+    """
     embed.add_field(name="🎉 **Événements**", value=events_commands.strip(), inline=False)
     
     # Configuration
-    config_commands = """`/config-roles` - Configurer les rôles par catégorie 🔒
-`/show-config` - Afficher la configuration des rôles"""
+    config_commands = """
+`/config-roles` - Configurer les rôles par catégorie 🔒
+`/show-config` - Afficher la configuration des rôles
+    """
     embed.add_field(name="⚙️ **Configuration**", value=config_commands.strip(), inline=False)
     
     # Twitch
-    twitch_commands = """`/twitchadd <streamers>` - Ajouter streamer(s) à suivre 🔒
+    twitch_commands = """
+`/twitchadd <streamers>` - Ajouter streamer(s) à suivre 🔒
 `/twitchremove <streamers>` - Retirer streamer(s) 🔒
 `/twitchlist` - Voir les streamers suivis
 `/twitchclear` - Vider la liste des streamers 🔒
-`/pingrole <role>` - Configurer le rôle à ping pour les lives 🔒"""
+    """
     embed.add_field(name="📺 **Twitch**", value=twitch_commands.strip(), inline=False)
     
     # Notifications
-    notification_commands = """`/notification-status` - Statut des notifications
+    notification_commands = """
+`/notification-status` - Statut des notifications
 `/restart-notifications` - Redémarrer le système 👑
 `/check-notifications` - Forcer une vérification 👑
-`/test-notification <id>` - Tester une notification 👑"""
+`/test-notification <id>` - Tester une notification 👑
+    """
     embed.add_field(name="🔔 **Notifications**", value=notification_commands.strip(), inline=False)
     
     # Administration
-    admin_commands = """`/sync-commands` - Synchroniser les commandes 👑
+    admin_commands = """
+`/sync-commands` - Synchroniser les commandes 👑
 `/debug-bot` - Informations de debug 👑
-`/ping` - Tester la connexion
-`/helpalpine` - Afficher cette aide"""
+`/helpalpine` - Afficher cette aide
+    """
     embed.add_field(name="🔧 **Administration**", value=admin_commands.strip(), inline=False)
     
     # Légende
@@ -1078,16 +1054,10 @@ async def debug_bot(interaction: discord.Interaction):
     
     await interaction.response.send_message(debug_info, ephemeral=True)
 
-@bot.tree.command(name="ping", description="Réponds pong")
-async def ping(interaction: discord.Interaction):
-    await interaction.response.send_message("🏓 Pong !")
-
 # === EVENTS DU BOT ===
 
 @bot.event
 async def on_ready():
-    await interaction.response.defer()
-
     print(f"✅ Connecté en tant que {bot.user}")
     
     try:
@@ -1151,25 +1121,13 @@ async def on_error(event, *args, **kwargs):
 async def on_command_error(ctx, error):
     print(f"Erreur de commande: {error}")
 
-@bot.tree.error
-async def on_app_command_error(interaction: discord.Interaction, error):
-    print(f"❌ Erreur de slash commande: {error}")
-    try:
-        if not interaction.response.is_done():
-            await interaction.response.send_message("❌ Une erreur est survenue lors de l'exécution de la commande.", ephemeral=True)
-        else:
-            await interaction.followup.send("❌ Une erreur est survenue lors de l'exécution de la commande.", ephemeral=True)
-    except Exception as e:
-        print(f"Erreur lors de l'envoi du message d'erreur: {e}")
-
 # === DÉMARRAGE ===
-async def main():
-    try:
-        if os.getenv("PORT"):
-            asyncio.create_task(start_web_server())
-        await bot.start(os.getenv("DISCORD_TOKEN"))
-    except Exception as e:
-        print(f"❌ Erreur dans main(): {e}")
-
-if __name__ == "__main__":
-    asyncio.run(main())
+if __name__ == '__main__':
+    token = os.getenv("DISCORD_TOKEN")
+    if token:
+        try:
+            bot.run(token)
+        except Exception as e:
+            print(f"❌ Erreur lors du démarrage du bot: {e}")
+    else:
+        print("❌ DISCORD_TOKEN manquant dans les variables d'environnement!")
