@@ -55,7 +55,7 @@ TWITCH_CLIENT_SECRET = os.getenv("TWITCH_CLIENT_SECRET")
 streamers = {}
 stream_messages = {}
 currently_live_streamers = {}
-ping_roles = {}
+ping_roles = {}  # {channel_id: role_id} - stockage des rôles à ping
 reaction_role_messages = {}
 
 class TwitchAPI:
@@ -126,12 +126,70 @@ async def check_streams():
             key = f"{channel_id}_{username}"
             if key in stream_messages:
                 continue  # already live
-            embed = discord.Embed(title=f"🔴 {stream['user_name']} est en live !", description=stream['title'], url=f"https://twitch.tv/{username}", color=0x9146ff)
-            msg = await channel.send(embed=embed)
+            
+            # Créer l'embed
+            embed = discord.Embed(
+                title=f"🔴 {stream['user_name']} est en live !", 
+                description=stream['title'], 
+                url=f"https://twitch.tv/{username}", 
+                color=0x9146ff
+            )
+            embed.add_field(name="🎮 Jeu", value=stream.get('game_name', 'Inconnu'), inline=True)
+            embed.add_field(name="👥 Viewers", value=str(stream.get('viewer_count', 0)), inline=True)
+            embed.set_thumbnail(url=stream.get('thumbnail_url', '').replace('{width}', '320').replace('{height}', '180'))
+            
+            # Récupérer le rôle à ping pour ce channel
+            ping_content = ""
+            if channel_id in ping_roles:
+                role = channel.guild.get_role(ping_roles[channel_id])
+                if role:
+                    ping_content = f"{role.mention} "
+            
+            # Envoyer le message avec le ping
+            msg = await channel.send(content=ping_content, embed=embed)
             stream_messages[key] = {'message_id': msg.id, 'last_update': datetime.now(UTC).timestamp()}
 
 @check_streams.before_loop
 async def before_check(): await bot.wait_until_ready()
+
+# === NOUVELLES COMMANDES TWITCH AVEC PING ===
+
+@bot.tree.command(name="twitch-ping-role", description="Définir le rôle à pinger lors des lives")
+@app_commands.describe(role="Rôle à mentionner quand un streamer passe en live (laisser vide pour supprimer)")
+async def set_ping_role(interaction: discord.Interaction, role: Optional[discord.Role] = None):
+    if not interaction.user.guild_permissions.manage_roles:
+        await interaction.response.send_message("❌ Vous n'avez pas les permissions pour configurer les rôles!", ephemeral=True)
+        return
+    
+    channel_id = interaction.channel_id
+    
+    if role is None:
+        # Supprimer le rôle ping
+        if channel_id in ping_roles:
+            del ping_roles[channel_id]
+            await interaction.response.send_message("✅ Rôle de ping supprimé! Aucun rôle ne sera mentionné lors des lives.", ephemeral=True)
+        else:
+            await interaction.response.send_message("⚠️ Aucun rôle de ping n'était configuré pour ce salon.", ephemeral=True)
+    else:
+        # Définir le rôle ping
+        ping_roles[channel_id] = role.id
+        await interaction.response.send_message(f"✅ Rôle de ping configuré! {role.mention} sera mentionné à chaque live dans ce salon.", ephemeral=True)
+
+@bot.tree.command(name="twitch-ping-status", description="Voir le rôle configuré pour les pings de live")
+async def ping_status(interaction: discord.Interaction):
+    channel_id = interaction.channel_id
+    
+    if channel_id not in ping_roles:
+        await interaction.response.send_message("📺 Aucun rôle de ping configuré pour ce salon.", ephemeral=True)
+        return
+    
+    role = interaction.guild.get_role(ping_roles[channel_id])
+    if role:
+        await interaction.response.send_message(f"📺 **Rôle de ping actuel:** {role.mention}\n\nCe rôle sera mentionné à chaque fois qu'un streamer passe en live dans ce salon.", ephemeral=True)
+    else:
+        # Le rôle n'existe plus, nettoyer
+        del ping_roles[channel_id]
+        await interaction.response.send_message("⚠️ Le rôle configuré n'existe plus. Configuration supprimée.", ephemeral=True)
 
 # === EVENTS ===
 events = {}
@@ -783,6 +841,16 @@ async def list_streamers(interaction: discord.Interaction):
         timestamp=get_current_time()
     )
     
+    # Afficher le rôle de ping configuré
+    if channel_id in ping_roles:
+        role = interaction.guild.get_role(ping_roles[channel_id])
+        if role:
+            embed.add_field(
+                name="🔔 Rôle de ping",
+                value=f"{role.mention} sera mentionné à chaque live",
+                inline=False
+            )
+    
     # Vérifier le statut des streamers
     streams = await twitch_api.get_streams(streamer_list)
     live_streamers = {s['user_login'] for s in streams}
@@ -826,7 +894,7 @@ async def clear_streamers(interaction: discord.Interaction):
     
     await interaction.response.send_message(f"✅ Liste vidée! **{count}** streamer(s) retiré(s) de ce salon.")
 
-# === COMMANDE HELP ===
+# === COMMANDE HELP MISE À JOUR ===
 
 @bot.tree.command(name="helpalpine", description="Afficher toutes les commandes disponibles")
 async def help_command(interaction: discord.Interaction):
@@ -859,6 +927,8 @@ async def help_command(interaction: discord.Interaction):
 `/twitchremove <streamers>` - Retirer streamer(s) 🔒
 `/twitchlist` - Voir les streamers suivis
 `/twitchclear` - Vider la liste des streamers 🔒
+`/twitch-ping-role <role>` - Définir le rôle à ping 🔒
+`/twitch-ping-status` - Voir le rôle de ping configuré
     """
     embed.add_field(name="📺 **Twitch**", value=twitch_commands.strip(), inline=False)
     
@@ -889,7 +959,7 @@ async def help_command(interaction: discord.Interaction):
     # Informations supplémentaires
     embed.add_field(
         name="ℹ️ **Informations**",
-        value="• Format de date: **DD/MM/YYYY HH:MM**\n• Notifications automatiques: 15min avant + live\n• Timezone: **Europe/Paris**\n• Surveillance Twitch: toutes les 2 minutes",
+        value="• Format de date: **DD/MM/YYYY HH:MM**\n• Notifications automatiques: 15min avant + live\n• Timezone: **Europe/Paris**\n• Surveillance Twitch: toutes les 2 minutes\n• **Nouveau:** Ping automatique de rôle pour les lives Twitch",
         inline=False
     )
     
@@ -1046,6 +1116,7 @@ async def debug_bot(interaction: discord.Interaction):
 - Notifications tracked: {len(notifications_sent)}
 - Configurations rôles: {len(guild_role_configs)}
 - Streamers suivis: {len(streamers)}
+- Rôles de ping Twitch: {len(ping_roles)}
 
 **Bot:**
 - Connecté: {'✅' if bot.is_ready() else '❌'}
