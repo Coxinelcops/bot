@@ -112,66 +112,147 @@ class TwitchAPI:
 
 twitch_api = TwitchAPI()
 
-@tasks.loop(minutes=2)
+def format_viewer_count(count):
+    """Formate le nombre de viewers de manière lisible"""
+    if count >= 1000:
+        return f"{count//1000}k"
+    return str(count)
+
+@tasks.loop(minutes=2)  # ✅ Confirmé : toutes les 2 minutes
 async def check_streams():
+    print(f"🔄 Vérification des streams Twitch - {datetime.now(TIMEZONE).strftime('%H:%M:%S')}")
+    
     for channel_id, streamer_list in streamers.items():
         if not streamer_list:
             continue
-
         channel = bot.get_channel(channel_id)
         if not channel:
             continue
-
-        # Obtenir les streams en cours
         streams = await twitch_api.get_streams(streamer_list)
         live_now = {s['user_login']: s for s in streams}
-
-        # Supprimer les messages des streamers qui ne sont plus en live
-        current_keys = set(stream_messages.keys())
-        active_keys = {f"{channel_id}_{s['user_login']}" for s in streams}
-
-        to_remove = current_keys - active_keys
-        for key in list(to_remove):
-            if key.startswith(f"{channel_id}_"):
-                try:
-                    msg_id = stream_messages[key]['message_id']
-                    msg = await channel.fetch_message(msg_id)
-                    await msg.delete()
-                except Exception as e:
-                    print(f"⚠️ Erreur suppression message {key} : {e}")
-                del stream_messages[key]
-
-        # Mettre à jour ou créer les messages pour les streamers en live
+        
+        # Vérifier les nouveaux streams
         for username, stream in live_now.items():
             key = f"{channel_id}_{username}"
+            if key in stream_messages:
+                continue  # already live
+            
+            # ✅ NOUVEAU : Embed avec nombre de viewers
             embed = discord.Embed(
                 title=f"🔴 {stream['user_name']} est en live !",
                 description=stream['title'],
                 url=f"https://twitch.tv/{username}",
                 color=0x9146ff
             )
-
+            
+            # ✅ NOUVEAU : Ajouter le nombre de viewers
+            viewer_count = stream.get('viewer_count', 0)
+            embed.add_field(
+                name="👥 Viewers", 
+                value=f"**{format_viewer_count(viewer_count)}** spectateurs", 
+                inline=True
+            )
+            
+            # Ajouter la catégorie/jeu si disponible
+            if stream.get('game_name'):
+                embed.add_field(
+                    name="🎮 Jeu", 
+                    value=stream['game_name'], 
+                    inline=True
+                )
+            
+            # Thumbnail
             thumbnail_url = stream.get('thumbnail_url', '').replace('{width}', '1280').replace('{height}', '720')
             if thumbnail_url:
                 embed.set_image(url=thumbnail_url)
-
-            viewer_count = stream.get('viewer_count', 0)
-            embed.add_field(name="👥 Viewers", value=f"{viewer_count}", inline=True)
-
+            
+            # ✅ NOUVEAU : Footer avec heure de début du stream
+            started_at = datetime.fromisoformat(stream['started_at'].replace('Z', '+00:00'))
+            started_at_paris = started_at.astimezone(TIMEZONE)
+            embed.set_footer(
+                text=f"Stream commencé à {started_at_paris.strftime('%H:%M')} • Mise à jour toutes les 2 min"
+            )
+            
             ping_content = f"<@&{ping_roles.get(channel_id)}>" if ping_roles.get(channel_id) else None
+            msg = await channel.send(content=ping_content, embed=embed)
+            stream_messages[key] = {
+                'message_id': msg.id, 
+                'last_update': datetime.now(UTC).timestamp(),
+                'message_obj': msg  # ✅ NOUVEAU : Stocker l'objet message pour les mises à jour
+            }
+            
+            print(f"📺 Nouveau stream détecté: {stream['user_name']} ({viewer_count} viewers)")
 
-            # Si le message existe déjà → mise à jour
-            if key in stream_messages:
+        # ✅ NOUVEAU : Mettre à jour les embeds existants avec le nouveau nombre de viewers
+        for username in streamer_list:
+            key = f"{channel_id}_{username}"
+            
+            # Si le stream est toujours live, mettre à jour les viewers
+            if key in stream_messages and username in live_now:
                 try:
-                    msg_id = stream_messages[key]['message_id']
-                    msg = await channel.fetch_message(msg_id)
-                    await msg.edit(embed=embed)
+                    stream = live_now[username]
+                    stored_msg = stream_messages[key]
+                    
+                    # Récupérer le message Discord
+                    if 'message_obj' in stored_msg:
+                        message = stored_msg['message_obj']
+                    else:
+                        message = await channel.fetch_message(stored_msg['message_id'])
+                        stream_messages[key]['message_obj'] = message
+                    
+                    # Créer l'embed mis à jour
+                    updated_embed = discord.Embed(
+                        title=f"🔴 {stream['user_name']} est en live !",
+                        description=stream['title'],
+                        url=f"https://twitch.tv/{username}",
+                        color=0x9146ff
+                    )
+                    
+                    viewer_count = stream.get('viewer_count', 0)
+                    updated_embed.add_field(
+                        name="👥 Viewers", 
+                        value=f"**{format_viewer_count(viewer_count)}** spectateurs", 
+                        inline=True
+                    )
+                    
+                    if stream.get('game_name'):
+                        updated_embed.add_field(
+                            name="🎮 Jeu", 
+                            value=stream['game_name'], 
+                            inline=True
+                        )
+                    
+                    thumbnail_url = stream.get('thumbnail_url', '').replace('{width}', '1280').replace('{height}', '720')
+                    if thumbnail_url:
+                        updated_embed.set_image(url=thumbnail_url)
+                    
+                    started_at = datetime.fromisoformat(stream['started_at'].replace('Z', '+00:00'))
+                    started_at_paris = started_at.astimezone(TIMEZONE)
+                    updated_embed.set_footer(
+                        text=f"Stream commencé à {started_at_paris.strftime('%H:%M')} • Dernière MàJ: {datetime.now(TIMEZONE).strftime('%H:%M')}"
+                    )
+                    
+                    # Mettre à jour le message
+                    await message.edit(embed=updated_embed)
                     stream_messages[key]['last_update'] = datetime.now(UTC).timestamp()
-                except discord.NotFound:
-                    del stream_messages[key]
-            else:
-                msg = await channel.send(content=ping_content, embed=embed)
-                stream_messages[key] = {'message_id': msg.id, 'last_update': datetime.now(UTC).timestamp()}
+                    
+                    print(f"🔄 Stream mis à jour: {stream['user_name']} ({viewer_count} viewers)")
+                    
+                except Exception as e:
+                    print(f"❌ Erreur mise à jour embed pour {username}: {e}")
+            
+            # Si le stream n'est plus live, supprimer le message
+            elif key in stream_messages and username not in live_now:
+                try:
+                    if 'message_obj' in stream_messages[key]:
+                        await stream_messages[key]['message_obj'].delete()
+                    else:
+                        message = await channel.fetch_message(stream_messages[key]['message_id'])
+                        await message.delete()
+                    print(f"📴 Stream terminé: {username}")
+                except:
+                    pass  # Message déjà supprimé ou inaccessible
+                del stream_messages[key]
 
 @check_streams.before_loop
 async def before_check(): await bot.wait_until_ready()
@@ -828,14 +909,16 @@ async def list_streamers(interaction: discord.Interaction):
     
     # Vérifier le statut des streamers
     streams = await twitch_api.get_streams(streamer_list)
-    live_streamers = {s['user_login'] for s in streams}
+    live_streamers = {s['user_login']: s for s in streams}
     
     online_list = []
     offline_list = []
     
     for streamer in streamer_list:
         if streamer in live_streamers:
-            online_list.append(f"🔴 **{streamer}** (EN LIVE)")
+            stream_data = live_streamers[streamer]
+            viewer_count = stream_data.get('viewer_count', 0)
+            online_list.append(f"🔴 **{streamer}** - {format_viewer_count(viewer_count)} viewers")
         else:
             offline_list.append(f"⚫ {streamer}")
     
@@ -844,6 +927,8 @@ async def list_streamers(interaction: discord.Interaction):
     
     if offline_list:
         embed.add_field(name="⚫ Hors ligne", value="\n".join(offline_list), inline=False)
+    
+    embed.set_footer(text="📡 Vérification toutes les 2 minutes")
     
     await interaction.followup.send(embed=embed)
 
@@ -912,7 +997,7 @@ async def help_command(interaction: discord.Interaction):
     twitch_commands = """
 `/twitchadd <streamers>` - Ajouter streamer(s) à suivre 🔒
 `/twitchremove <streamers>` - Retirer streamer(s) 🔒
-`/twitchlist` - Voir les streamers suivis
+`/twitchlist` - Voir les streamers suivis (avec viewers)
 `/twitchclear` - Vider la liste des streamers 🔒
 `/pingrole <role>` - Configurer le rôle à ping pour les lives 🔒
     """
@@ -946,7 +1031,7 @@ async def help_command(interaction: discord.Interaction):
     # Informations supplémentaires
     embed.add_field(
         name="ℹ️ **Informations**",
-        value="• Format de date: **DD/MM/YYYY HH:MM**\n• Notifications automatiques: 15min avant + live\n• Timezone: **Europe/Paris**\n• Surveillance Twitch: toutes les 2 minutes",
+        value="• Format de date: **DD/MM/YYYY HH:MM**\n• Notifications automatiques: 15min avant + live\n• Timezone: **Europe/Paris**\n• **Surveillance Twitch: toutes les 2 minutes avec viewers**",
         inline=False
     )
     
@@ -985,9 +1070,12 @@ async def notification_status(interaction: discord.Interaction):
     
     # Statut du système
     is_running = notification_system.is_running()
+    twitch_running = check_streams.is_running()
     status_text += f"🔄 **Système actif:** {'✅ OUI' if is_running else '❌ NON'}\n"
+    status_text += f"📺 **Twitch actif:** {'✅ OUI (2min)' if twitch_running else '❌ NON'}\n"
     status_text += f"📊 **Événements totaux:** {len(events)}\n"
-    status_text += f"🔔 **Dans le système de notif:** {len(notifications_sent)}\n\n"
+    status_text += f"🔔 **Dans le système de notif:** {len(notifications_sent)}\n"
+    status_text += f"📡 **Streams suivis:** {sum(len(s) for s in streamers.values())}\n\n"
     
     if not events:
         status_text += "📅 Aucun événement en cours."
@@ -1095,14 +1183,16 @@ async def debug_bot(interaction: discord.Interaction):
 - Prochaine exécution: {notification_system.next_iteration}
 
 **Système Twitch:**
-- Actif: {'✅' if check_streams.is_running() else '❌'}
+- Actif: {'✅ (2min)' if check_streams.is_running() else '❌'}
 - Token valide: {'✅' if twitch_api.token else '❌'}
+- Prochaine vérification: {check_streams.next_iteration}
 
 **Données:**
 - Événements: {len(events)}
 - Notifications tracked: {len(notifications_sent)}
 - Configurations rôles: {len(guild_role_configs)}
-- Streamers suivis: {len(streamers)}
+- Streamers suivis: {sum(len(s) for s in streamers.values())}
+- Messages de stream actifs: {len(stream_messages)}
 
 **Bot:**
 - Connecté: {'✅' if bot.is_ready() else '❌'}
@@ -1156,7 +1246,7 @@ async def on_ready():
         # Démarrer les systèmes de tâches
         if not check_streams.is_running():
             check_streams.start()
-            print("✅ Système de vérification Twitch démarré!")
+            print("✅ Système de vérification Twitch démarré! (toutes les 2 minutes)")
         
         if not notification_system.is_running():
             notification_system.start()
