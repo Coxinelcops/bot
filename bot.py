@@ -870,13 +870,7 @@ async def help_command(interaction: discord.Interaction):
         color=0x00AE86,
         timestamp=get_current_time()
     )
-",
-        color=0x00AE86,
-        timestamp=get_current_time()
-    )
-    
-    # Événements
-    events_commands = """
+""",         color=0x00AE86,         timestamp=get_current_time()     )          # Événements     events_commands ="""
 `/event-create` - Créer un nouvel événement
 `/event-list` - Afficher tous les événements
 `/event-info <id>` - Détails d'un événement
