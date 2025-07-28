@@ -1139,6 +1139,11 @@ if __name__ == '__main__':
         try:
             
 
+")
+
+
+    
+
 @bot.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error):
     print(f"❌ Erreur de slash commande: {error}")
