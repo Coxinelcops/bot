@@ -866,7 +866,7 @@ async def set_ping_role(interaction: discord.Interaction, role: discord.Role):
 async def help_command(interaction: discord.Interaction):
     embed = discord.Embed(
         title="📋 Guide des Commandes - Bot Alpine",
-        description="Voici toutes les commandes disponibles organisées par catégorie :
+        description="""Voici toutes les commandes disponibles organisées par catégorie :""",
     await interaction.response.defer()
 ",
         color=0x00AE86,
