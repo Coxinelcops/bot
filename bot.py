@@ -126,8 +126,17 @@ async def check_streams():
             key = f"{channel_id}_{username}"
             if key in stream_messages:
                 continue  # already live
-            embed = discord.Embed(title=f"🔴 {stream['user_name']} est en live !", description=stream['title'], url=f"https://twitch.tv/{username}", color=0x9146ff)
-            msg = await channel.send(embed=embed)
+            embed = discord.Embed(
+                title=f"🔴 {stream['user_name']} est en live !",
+                description=stream['title'],
+                url=f"https://twitch.tv/{username}",
+                color=0x9146ff
+            )
+            thumbnail_url = stream.get('thumbnail_url', '').replace('{width}', '1280').replace('{height}', '720')
+            if thumbnail_url:
+                embed.set_image(url=thumbnail_url)
+            ping_content = f"<@&{ping_roles.get(channel_id)}>" if ping_roles.get(channel_id) else None
+            msg = await channel.send(content=ping_content, embed=embed)
             stream_messages[key] = {'message_id': msg.id, 'last_update': datetime.now(UTC).timestamp()}
 
 @check_streams.before_loop
@@ -310,7 +319,7 @@ async def create_event(
             )
             return
         
-        # Maintenant qu'on a validé, on peut defer
+        # MAINTENANT qu'on a validé, on peut defer
         await interaction.response.defer()
         
         # Si aucun rôle n'est spécifié, essayer de le trouver automatiquement par catégorie
@@ -549,7 +558,7 @@ async def show_config(interaction: discord.Interaction):
 
 @bot.tree.command(name="event-list", description="Afficher tous les événements")
 async def list_events(interaction: discord.Interaction):
-    # Répondre immédiatement
+    # Répondre immédiatement avec defer
     await interaction.response.defer()
     
     guild_events = [event for event in events.values() if event.guild_id == interaction.guild_id]
@@ -678,43 +687,41 @@ async def add_streamer(interaction: discord.Interaction, usernames: str):
     if not interaction.user.guild_permissions.manage_channels:
         await interaction.response.send_message("❌ Vous n'avez pas les permissions pour gérer les streamers!", ephemeral=True)
         return
-    
-    channel_id = interaction.channel_id
-    
-    # Séparer les noms d'utilisateur et les nettoyer
-    username_list = [username.lower().replace('@', '').strip() for username in usernames.split()]
-    username_list = [username for username in username_list if username]  # Supprimer les chaînes vides
-    
+
+    # Nettoyer les noms d'utilisateur
+    username_list = [u.lower().replace('@', '').strip() for u in usernames.split() if u.strip()]
     if not username_list:
         await interaction.response.send_message("❌ Veuillez fournir au moins un nom d'utilisateur valide!", ephemeral=True)
         return
-    
+
+    # Defer la réponse APRÈS la validation
+    await interaction.response.defer(ephemeral=True)
+
+    channel_id = interaction.channel_id
+
     if channel_id not in streamers:
         streamers[channel_id] = []
-    
+
     added = []
     already_exists = []
-    
+
     for username in username_list:
         if username in streamers[channel_id]:
             already_exists.append(username)
         else:
             streamers[channel_id].append(username)
             added.append(username)
-    
-    # Construire le message de réponse
+
     response_parts = []
-    
     if added:
-        response_parts.append(f"✅ **Ajouté{'s' if len(added) > 1 else ''}:** {', '.join(added)}")
-    
+        response_parts.append(f"✅ **Ajouté{'s' if len(added) > 1 else ''} :** {', '.join(added)}")
     if already_exists:
-        response_parts.append(f"⚠️ **Déjà suivi{'s' if len(already_exists) > 1 else ''}:** {', '.join(already_exists)}")
-    
+        response_parts.append(f"⚠️ **Déjà suivi{'s' if len(already_exists) > 1 else ''} :** {', '.join(already_exists)}")
     if not added and already_exists:
-        response_parts = [f"⚠️ Tous les streamers sont déjà suivis dans ce salon!"]
-    
-    await interaction.response.send_message('\n'.join(response_parts))
+        response_parts = ["⚠️ Tous les streamers sont déjà suivis dans ce salon!"]
+
+    await interaction.followup.send('\n'.join(response_parts))
+
 
 @bot.tree.command(name="twitchremove", description="Retirer un ou plusieurs streamers de la liste")
 @app_commands.describe(usernames="Noms d'utilisateur Twitch à retirer, séparés par des espaces")
@@ -723,8 +730,6 @@ async def remove_streamer(interaction: discord.Interaction, usernames: str):
         await interaction.response.send_message("❌ Vous n'avez pas les permissions pour gérer les streamers!", ephemeral=True)
         return
     
-    channel_id = interaction.channel_id
-    
     # Séparer les noms d'utilisateur et les nettoyer
     username_list = [username.lower().replace('@', '').strip() for username in usernames.split()]
     username_list = [username for username in username_list if username]  # Supprimer les chaînes vides
@@ -733,9 +738,14 @@ async def remove_streamer(interaction: discord.Interaction, usernames: str):
         await interaction.response.send_message("❌ Veuillez fournir au moins un nom d'utilisateur valide!", ephemeral=True)
         return
     
+    channel_id = interaction.channel_id
+    
     if channel_id not in streamers or not streamers[channel_id]:
         await interaction.response.send_message("❌ Aucun streamer n'est suivi dans ce salon!", ephemeral=True)
         return
+    
+    # Defer APRÈS les validations
+    await interaction.response.defer()
     
     removed = []
     not_found = []
@@ -761,11 +771,11 @@ async def remove_streamer(interaction: discord.Interaction, usernames: str):
     if not_found:
         response_parts.append(f"❌ **Non trouvé{'s' if len(not_found) > 1 else ''}:** {', '.join(not_found)}")
     
-    await interaction.response.send_message('\n'.join(response_parts))
+    await interaction.followup.send('\n'.join(response_parts))
 
 @bot.tree.command(name="twitchlist", description="Voir la liste des streamers suivis")
 async def list_streamers(interaction: discord.Interaction):
-    # Répondre immédiatement
+    # Répondre immédiatement avec defer
     await interaction.response.defer()
     
     channel_id = interaction.channel_id
@@ -825,6 +835,18 @@ async def clear_streamers(interaction: discord.Interaction):
     
     await interaction.response.send_message(f"✅ Liste vidée! **{count}** streamer(s) retiré(s) de ce salon.")
 
+@bot.tree.command(name="pingrole", description="Associer un rôle à ping quand un stream est en live dans ce salon")
+@app_commands.describe(role="Rôle à mentionner")
+async def set_ping_role(interaction: discord.Interaction, role: discord.Role):
+    if not interaction.user.guild_permissions.manage_channels:
+        await interaction.response.send_message("❌ Vous n'avez pas la permission!", ephemeral=True)
+        return
+    try:
+        ping_roles[interaction.channel_id] = role.id
+        await interaction.response.send_message(f"✅ Le rôle {role.mention} sera ping lorsque quelqu'un sera en live dans ce salon.", ephemeral=True)
+    except Exception as e:
+        await interaction.response.send_message(f"❌ Erreur : {e}", ephemeral=True)
+
 # === COMMANDE HELP ===
 
 @bot.tree.command(name="helpalpine", description="Afficher toutes les commandes disponibles")
@@ -858,6 +880,7 @@ async def help_command(interaction: discord.Interaction):
 `/twitchremove <streamers>` - Retirer streamer(s) 🔒
 `/twitchlist` - Voir les streamers suivis
 `/twitchclear` - Vider la liste des streamers 🔒
+`/pingrole <role>` - Configurer le rôle à ping pour les lives 🔒
     """
     embed.add_field(name="📺 **Twitch**", value=twitch_commands.strip(), inline=False)
     
@@ -874,6 +897,7 @@ async def help_command(interaction: discord.Interaction):
     admin_commands = """
 `/sync-commands` - Synchroniser les commandes 👑
 `/debug-bot` - Informations de debug 👑
+`/ping` - Tester la connexion
 `/helpalpine` - Afficher cette aide
     """
     embed.add_field(name="🔧 **Administration**", value=admin_commands.strip(), inline=False)
@@ -1053,6 +1077,10 @@ async def debug_bot(interaction: discord.Interaction):
     
     await interaction.response.send_message(debug_info, ephemeral=True)
 
+@bot.tree.command(name="ping", description="Réponds pong")
+async def ping(interaction: discord.Interaction):
+    await interaction.response.send_message("🏓 Pong !")
+
 # === EVENTS DU BOT ===
 
 @bot.event
@@ -1119,6 +1147,17 @@ async def on_error(event, *args, **kwargs):
 @bot.event
 async def on_command_error(ctx, error):
     print(f"Erreur de commande: {error}")
+
+@bot.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error):
+    print(f"❌ Erreur de slash commande: {error}")
+    try:
+        if not interaction.response.is_done():
+            await interaction.response.send_message("❌ Une erreur est survenue lors de l'exécution de la commande.", ephemeral=True)
+        else:
+            await interaction.followup.send("❌ Une erreur est survenue lors de l'exécution de la commande.", ephemeral=True)
+    except Exception as e:
+        print(f"Erreur lors de l'envoi du message d'erreur: {e}")
 
 # === DÉMARRAGE ===
 if __name__ == '__main__':
