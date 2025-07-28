@@ -117,38 +117,62 @@ async def check_streams():
     for channel_id, streamer_list in streamers.items():
         if not streamer_list:
             continue
+
         channel = bot.get_channel(channel_id)
         if not channel:
             continue
+
+        # Obtenir les streams en cours
         streams = await twitch_api.get_streams(streamer_list)
         live_now = {s['user_login']: s for s in streams}
+
+        # Supprimer les messages des streamers qui ne sont plus en live
+        current_keys = set(stream_messages.keys())
+        active_keys = {f"{channel_id}_{s['user_login']}" for s in streams}
+
+        to_remove = current_keys - active_keys
+        for key in list(to_remove):
+            if key.startswith(f"{channel_id}_"):
+                try:
+                    msg_id = stream_messages[key]['message_id']
+                    msg = await channel.fetch_message(msg_id)
+                    await msg.delete()
+                except Exception as e:
+                    print(f"⚠️ Erreur suppression message {key} : {e}")
+                del stream_messages[key]
+
+        # Mettre à jour ou créer les messages pour les streamers en live
         for username, stream in live_now.items():
             key = f"{channel_id}_{username}"
-            if key in stream_messages:
-                continue  # already live
             embed = discord.Embed(
                 title=f"🔴 {stream['user_name']} est en live !",
                 description=stream['title'],
                 url=f"https://twitch.tv/{username}",
                 color=0x9146ff
             )
+
             thumbnail_url = stream.get('thumbnail_url', '').replace('{width}', '1280').replace('{height}', '720')
             if thumbnail_url:
                 embed.set_image(url=thumbnail_url)
+
+            viewer_count = stream.get('viewer_count', 0)
+            embed.add_field(name="👥 Viewers", value=f"{viewer_count}", inline=True)
+
             ping_content = f"<@&{ping_roles.get(channel_id)}>" if ping_roles.get(channel_id) else None
-            msg = await channel.send(content=ping_content, embed=embed)
-            stream_messages[key] = {'message_id': msg.id, 'last_update': datetime.now(UTC).timestamp()}
 
-@check_streams.before_loop
-async def before_check(): await bot.wait_until_ready()
+            # Si le message existe déjà → mise à jour
+            if key in stream_messages:
+                try:
+                    msg_id = stream_messages[key]['message_id']
+                    msg = await channel.fetch_message(msg_id)
+                    await msg.edit(embed=embed)
+                    stream_messages[key]['last_update'] = datetime.now(UTC).timestamp()
+                except discord.NotFound:
+                    del stream_messages[key]
+            else:
+                msg = await channel.send(content=ping_content, embed=embed)
+                stream_messages[key] = {'message_id': msg.id, 'last_update': datetime.now(UTC).timestamp()}
 
-# === EVENTS ===
-events = {}
-event_id_counter = 1
-event_messages = {}
-notifications_sent = {}
-guild_role_configs = {}
-notification_messages = {}
 
 class Event:
     def __init__(self, id, name, date, creator, guild_id, channel_id, role_id=None, category=None, stream=None, lieu=None, image=None, description=None):
