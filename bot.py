@@ -585,7 +585,8 @@ async def create_event(
                 )
             else:
                 await interaction.followup.send(f"❌ Erreur: {e}", ephemeral=True)
-        print(f"Erreur check notifications: {e}")
+        except Exception as inner_e:
+            print(f"Erreur lors de l'envoi du message d'erreur: {inner_e}")
 
 @bot.tree.command(name="test-notification", description="Tester une notification (admin seulement)")
 @app_commands.describe(event_id="ID de l'événement à tester")
