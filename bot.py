@@ -821,38 +821,6 @@ if hasattr(signal, 'SIGTERM'):
 if hasattr(signal, 'SIGINT'):
     signal.signal(signal.SIGINT, signal_handler)
 
-# === DÉMARRAGE ===
-if __name__ == '__main__':
-    token = os.getenv("DISCORD_TOKEN")
-    if not token:
-        print("❌ DISCORD_TOKEN manquant dans les variables d'environnement!")
-        print("💡 Assurez-vous que la variable DISCORD_TOKEN est définie")
-        exit(1)
-    
-    print("🚀 Démarrage du Bot Alpine...")
-    print(f"🔧 Variables d'environnement:")
-    print(f"  - DISCORD_TOKEN: {'✅ Défini' if token else '❌ Manquant'}")
-    print(f"  - TWITCH_CLIENT_ID: {'✅ Défini' if os.getenv('TWITCH_CLIENT_ID') else '❌ Manquant'}")
-    print(f"  - TWITCH_CLIENT_SECRET: {'✅ Défini' if os.getenv('TWITCH_CLIENT_SECRET') else '❌ Manquant'}")
-    print(f"  - PORT: {'✅ ' + os.getenv('PORT') if os.getenv('PORT') else '❌ Non défini'}")
-    print("-" * 50)
-    
-    try:
-        bot.run(token)
-    except KeyboardInterrupt:
-        print("\n🛑 Arrêt manuel détecté...")
-    except Exception as e:
-        print(f"❌ ERREUR CRITIQUE lors du démarrage du bot: {e}")
-        import traceback
-        traceback.print_exc()
-    finally:
-        print("👋 Bot arrêté!")
-                    f"❌ Erreur lors de la création de l'événement: {str(e)}",
-                    ephemeral=True
-                )
-        except:
-            pass
-
 # Fonction pour supprimer un message après un délai
 async def delete_message_after_delay(message, delay_minutes):
     await asyncio.sleep(delay_minutes * 60)
@@ -1609,4 +1577,31 @@ async def check_notifications(interaction: discord.Interaction):
         await notification_system.coro()
         await interaction.followup.send("✅ Vérification terminée! Consultez les logs.", ephemeral=True)
     except Exception as e:
-        await interaction.followup.send(
+        await interaction.followup.send(f"❌ Erreur lors de la vérification: {e}", ephemeral=True)
+
+# === DÉMARRAGE ===
+if __name__ == '__main__':
+    token = os.getenv("DISCORD_TOKEN")
+    if not token:
+        print("❌ DISCORD_TOKEN manquant dans les variables d'environnement!")
+        print("💡 Assurez-vous que la variable DISCORD_TOKEN est définie")
+        exit(1)
+    
+    print("🚀 Démarrage du Bot Alpine...")
+    print(f"🔧 Variables d'environnement:")
+    print(f"  - DISCORD_TOKEN: {'✅ Défini' if token else '❌ Manquant'}")
+    print(f"  - TWITCH_CLIENT_ID: {'✅ Défini' if os.getenv('TWITCH_CLIENT_ID') else '❌ Manquant'}")
+    print(f"  - TWITCH_CLIENT_SECRET: {'✅ Défini' if os.getenv('TWITCH_CLIENT_SECRET') else '❌ Manquant'}")
+    print(f"  - PORT: {'✅ ' + os.getenv('PORT') if os.getenv('PORT') else '❌ Non défini'}")
+    print("-" * 50)
+    
+    try:
+        bot.run(token)
+    except KeyboardInterrupt:
+        print("\n🛑 Arrêt manuel détecté...")
+    except Exception as e:
+        print(f"❌ ERREUR CRITIQUE lors du démarrage du bot: {e}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        print("👋 Bot arrêté!")
