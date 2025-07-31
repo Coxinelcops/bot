@@ -36,18 +36,130 @@ def format_date(date):
     days = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"]
     return f"{days[date.weekday()]} {date.day} {months[date.month - 1]} {date.year} à {date.strftime('%H:%M')}"
 
-# === FLASK (render) ===
+# === SERVEUR WEB AMÉLIORÉ ===
+web_runner = None
+web_site = None
+
 async def start_web_server():
-    async def health_check(request):
-        return web.Response(text="Bot Discord actif ✅", status=200)
-    app = web.Application()
-    app.router.add_get('/', health_check)
-    app.router.add_get('/health', health_check)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, '0.0.0.0', int(os.getenv('PORT', 8080)))
-    await site.start()
-    print(f"🌐 Serveur web démarré sur le port {os.getenv('PORT', 8080)}")
+    """Démarrer le serveur web avec gestion d'erreurs améliorée"""
+    global web_runner, web_site
+    
+    try:
+        async def health_check(request):
+            """Endpoint de santé avec informations détaillées"""
+            bot_status = "✅ CONNECTÉ" if bot.is_ready() else "❌ DÉCONNECTÉ"
+            notif_status = "✅ ACTIF" if notification_system.is_running() else "❌ ARRÊTÉ"
+            twitch_status = "✅ ACTIF" if check_streams.is_running() else "❌ ARRÊTÉ"
+            
+            health_data = {
+                "status": "healthy",
+                "timestamp": datetime.now(TIMEZONE).isoformat(),
+                "bot": {
+                    "connected": bot.is_ready(),
+                    "status": bot_status,
+                    "latency": f"{round(bot.latency * 1000)}ms" if bot.is_ready() else "N/A",
+                    "guilds": len(bot.guilds) if bot.is_ready() else 0
+                },
+                "services": {
+                    "notifications": notif_status,
+                    "twitch": twitch_status,
+                    "events_count": len(events),
+                    "streamers_count": sum(len(s) for s in streamers.values())
+                }
+            }
+            
+            return web.Response(
+                text=f"🤖 Bot Discord Alpine - Status: {bot_status}\n"
+                     f"🔔 Notifications: {notif_status}\n"
+                     f"📺 Twitch: {twitch_status}\n"
+                     f"⏰ {datetime.now(TIMEZONE).strftime('%d/%m/%Y %H:%M:%S')} (Paris)\n"
+                     f"📊 {len(events)} événements, {sum(len(s) for s in streamers.values())} streamers",
+                status=200,
+                headers={'Content-Type': 'text/plain; charset=utf-8'}
+            )
+        
+        async def health_json(request):
+            """Endpoint JSON pour monitoring avancé"""
+            bot_status = bot.is_ready()
+            notif_status = notification_system.is_running()
+            twitch_status = check_streams.is_running()
+            
+            health_data = {
+                "status": "healthy" if (bot_status and notif_status) else "degraded",
+                "timestamp": datetime.now(TIMEZONE).isoformat(),
+                "bot": {
+                    "connected": bot_status,
+                    "latency_ms": round(bot.latency * 1000) if bot_status else None,
+                    "guilds": len(bot.guilds) if bot_status else 0
+                },
+                "services": {
+                    "notifications_running": notif_status,
+                    "twitch_running": twitch_status,
+                    "events_count": len(events),
+                    "streamers_count": sum(len(s) for s in streamers.values()),
+                    "active_streams": len(stream_messages)
+                },
+                "uptime": "running"  # Vous pouvez ajouter un vrai uptime si nécessaire
+            }
+            
+            return web.json_response(health_data)
+        
+        async def ping(request):
+            """Simple endpoint ping"""
+            return web.Response(text="pong", status=200)
+        
+        # Créer l'application web
+        app = web.Application()
+        
+        # Ajouter les routes
+        app.router.add_get('/', health_check)
+        app.router.add_get('/health', health_check)
+        app.router.add_get('/health.json', health_json)
+        app.router.add_get('/ping', ping)
+        app.router.add_get('/status', health_check)
+        
+        # Configuration du serveur
+        port = int(os.getenv('PORT', 8080))
+        host = '0.0.0.0'
+        
+        # Démarrer le serveur avec gestion d'erreurs
+        web_runner = web.AppRunner(app)
+        await web_runner.setup()
+        
+        web_site = web.TCPSite(web_runner, host, port)
+        await web_site.start()
+        
+        print(f"🌐 Serveur web démarré avec succès:")
+        print(f"   - Adresse: http://{host}:{port}")
+        print(f"   - Health check: http://{host}:{port}/health")
+        print(f"   - JSON status: http://{host}:{port}/health.json")
+        print(f"   - Ping: http://{host}:{port}/ping")
+        
+        return True
+        
+    except Exception as e:
+        print(f"❌ ERREUR CRITIQUE - Serveur web: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+async def stop_web_server():
+    """Arrêter proprement le serveur web"""
+    global web_runner, web_site
+    
+    try:
+        if web_site:
+            await web_site.stop()
+            web_site = None
+            print("🛑 Site web arrêté")
+        
+        if web_runner:
+            await web_runner.cleanup()
+            web_runner = None
+            print("🛑 Runner web nettoyé")
+            
+    except Exception as e:
+        print(f"⚠️ Erreur lors de l'arrêt du serveur web: {e}")
 
 # === TWITCH ===
 TWITCH_CLIENT_ID = os.getenv("TWITCH_CLIENT_ID")
@@ -472,7 +584,268 @@ async def create_event(
                     ephemeral=True
                 )
             else:
-                await interaction.followup.send(
+                await interaction.followup.send(f"❌ Erreur: {e}", ephemeral=True)
+        print(f"Erreur check notifications: {e}")
+
+@bot.tree.command(name="test-notification", description="Tester une notification (admin seulement)")
+@app_commands.describe(event_id="ID de l'événement à tester")
+async def test_notification(interaction: discord.Interaction, event_id: int):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ Seuls les administrateurs peuvent utiliser cette commande!", ephemeral=True)
+        return
+    
+    if event_id not in events:
+        await interaction.response.send_message(f"❌ Événement {event_id} introuvable!", ephemeral=True)
+        return
+    
+    event = events[event_id]
+    await interaction.response.send_message(f"🧪 Test de notification pour: {event.name}", ephemeral=True)
+    
+    # Tester notification 15min
+    success1 = await send_event_notification(event, 15)
+    
+    # Attendre 2 secondes puis tester notification live
+    await asyncio.sleep(2)
+    success2 = await send_event_notification(event, 0)
+    
+    result = f"Notification 15min: {'✅' if success1 else '❌'}\nNotification Live: {'✅' if success2 else '❌'}"
+    await interaction.followup.send(result, ephemeral=True)
+
+@bot.tree.command(name="debug-bot", description="Informations de debug du bot")
+async def debug_bot(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ Seuls les administrateurs peuvent utiliser cette commande!", ephemeral=True)
+        return
+    
+    debug_info = f"""**🔧 Debug Bot Info:**
+
+**Système de notifications:**
+- Actif: {'✅' if notification_system.is_running() else '❌'}
+- Prochaine exécution: {notification_system.next_iteration}
+
+**Système Twitch:**
+- Actif: {'✅ (2min)' if check_streams.is_running() else '❌'}
+- Token valide: {'✅' if twitch_api.token else '❌'}
+- Prochaine vérification: {check_streams.next_iteration}
+
+**Serveur Web:**
+- Runner actif: {'✅' if web_runner is not None else '❌'}
+- Site actif: {'✅' if web_site is not None else '❌'}
+- Port configuré: {os.getenv('PORT', '8080')}
+
+**Données:**
+- Événements: {len(events)}
+- Notifications tracked: {len(notifications_sent)}
+- Configurations rôles: {len(guild_role_configs)}
+- Streamers suivis: {sum(len(s) for s in streamers.values())}
+- Messages de stream actifs: {len(stream_messages)}
+
+**Bot:**
+- Connecté: {'✅' if bot.is_ready() else '❌'}
+- Latence: {round(bot.latency * 1000)}ms
+- Guilds: {len(bot.guilds)}
+"""
+    
+    await interaction.response.send_message(debug_info, ephemeral=True)
+
+@bot.tree.command(name="ping", description="Tester la connexion du bot")
+async def ping(interaction: discord.Interaction):
+    latency = round(bot.latency * 1000)
+    
+    embed = discord.Embed(
+        title="🏓 Pong !",
+        color=0x00AE86,
+        timestamp=get_current_time()
+    )
+    
+    embed.add_field(name="⚡ Latence", value=f"{latency}ms", inline=True)
+    embed.add_field(name="🤖 Statut", value="✅ En ligne" if bot.is_ready() else "❌ Hors ligne", inline=True)
+    embed.add_field(name="🌐 Serveur Web", value="✅ Actif" if web_runner is not None else "❌ Inactif", inline=True)
+    
+    await interaction.response.send_message(embed=embed)
+
+# === EVENTS DU BOT ===
+
+@bot.event
+async def on_ready():
+    print(f"✅ Connecté en tant que {bot.user}")
+    print(f"🆔 ID du bot: {bot.user.id}")
+    print(f"🏰 Connecté à {len(bot.guilds)} serveur(s)")
+    
+    try:
+        # Attendre un peu pour être sûr que le bot est prêt
+        await asyncio.sleep(2)
+        
+        # Synchronisation des commandes
+        print(f"📋 Commandes enregistrées dans le bot:")
+        for cmd in bot.tree.get_commands():
+            print(f"  - {cmd.name}: {cmd.description}")
+        
+        print(f"🔄 Synchronisation des commandes avec Discord...")
+        
+        # Synchronisation globale ET locale pour être sûr
+        synced_global = await bot.tree.sync()
+        print(f'✅ {len(synced_global)} commandes synchronisées globalement!')
+        
+        print(f"📤 Commandes synchronisées:")
+        for cmd in synced_global:
+            print(f"  - /{cmd.name}")
+        
+        # Initialiser l'API Twitch
+        print("🔗 Initialisation de l'API Twitch...")
+        await twitch_api.get_token()
+        if twitch_api.token:
+            print("✅ Token Twitch obtenu avec succès!")
+        else:
+            print("⚠️ Impossible d'obtenir le token Twitch")
+        
+        # Démarrer les systèmes de tâches
+        if not check_streams.is_running():
+            check_streams.start()
+            print("✅ Système de vérification Twitch démarré! (toutes les 2 minutes)")
+        else:
+            print("ℹ️ Système Twitch déjà en cours d'exécution")
+        
+        if not notification_system.is_running():
+            notification_system.start()
+            print("✅ Système de notifications démarré!")
+        else:
+            print("ℹ️ Système de notifications déjà en cours d'exécution")
+        
+        # Démarrer le serveur web si le PORT est défini
+        port_env = os.getenv("PORT")
+        if port_env:
+            print(f"🌐 Démarrage du serveur web sur le port {port_env}...")
+            success = await start_web_server()
+            if success:
+                print("✅ Serveur web démarré avec succès!")
+            else:
+                print("❌ ÉCHEC du démarrage du serveur web!")
+        else:
+            print("⚠️ Variable PORT non définie, serveur web non démarré")
+            
+        print("🚀 Bot complètement initialisé et prêt!")
+        print("="*50)
+        print("📊 RÉSUMÉ DE L'INITIALISATION:")
+        print(f"  🤖 Bot connecté: ✅")
+        print(f"  📋 Commandes sync: ✅ ({len(synced_global)})")
+        print(f"  📺 Système Twitch: {'✅' if check_streams.is_running() else '❌'}")
+        print(f"  🔔 Notifications: {'✅' if notification_system.is_running() else '❌'}")
+        print(f"  🌐 Serveur web: {'✅' if web_runner is not None else '❌'}")
+        print(f"  🔑 Token Twitch: {'✅' if twitch_api.token else '❌'}")
+        print("="*50)
+            
+    except Exception as e:
+        print(f"❌ ERREUR CRITIQUE lors de l'initialisation: {e}")
+        import traceback
+        traceback.print_exc()
+        print("⚠️ Le bot peut ne pas fonctionner correctement!")
+
+# Gestion des erreurs améliorée
+@bot.event
+async def on_error(event, *args, **kwargs):
+    print(f"❌ Erreur dans l'event {event}: {args} {kwargs}")
+    import traceback
+    traceback.print_exc()
+
+@bot.event
+async def on_command_error(ctx, error):
+    print(f"❌ Erreur de commande: {error}")
+    import traceback
+    traceback.print_exc()
+
+@bot.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error):
+    print(f"❌ Erreur de slash commande: {error}")
+    import traceback
+    traceback.print_exc()
+    
+    try:
+        error_msg = "❌ Une erreur est survenue lors de l'exécution de la commande."
+        
+        # Messages d'erreur plus spécifiques
+        if "Missing Access" in str(error):
+            error_msg = "❌ Le bot n'a pas les permissions nécessaires pour cette action."
+        elif "Unknown Channel" in str(error):
+            error_msg = "❌ Canal introuvable ou inaccessible."
+        elif "Unknown Guild" in str(error):
+            error_msg = "❌ Serveur introuvable."
+        elif "HTTPException" in str(error):
+            error_msg = "❌ Erreur de communication avec Discord. Réessayez dans quelques secondes."
+        
+        if not interaction.response.is_done():
+            await interaction.response.send_message(error_msg, ephemeral=True)
+        else:
+            await interaction.followup.send(error_msg, ephemeral=True)
+    except Exception as e:
+        print(f"❌ Erreur lors de l'envoi du message d'erreur: {e}")
+
+# === SIGNAL HANDLERS POUR ARRÊT PROPRE ===
+import signal
+
+def signal_handler(signum, frame):
+    print(f"\n🛑 Signal {signum} reçu, arrêt du bot...")
+    asyncio.create_task(shutdown_bot())
+
+async def shutdown_bot():
+    """Arrêt propre du bot et de tous ses services"""
+    print("🔄 Arrêt en cours...")
+    
+    try:
+        # Arrêter les tâches
+        if check_streams.is_running():
+            check_streams.cancel()
+            print("🛑 Système Twitch arrêté")
+        
+        if notification_system.is_running():
+            notification_system.cancel()
+            print("🛑 Système de notifications arrêté")
+        
+        # Arrêter le serveur web
+        await stop_web_server()
+        
+        # Fermer le bot
+        await bot.close()
+        print("🛑 Bot fermé proprement")
+        
+    except Exception as e:
+        print(f"❌ Erreur lors de l'arrêt: {e}")
+    
+    finally:
+        print("👋 Goodbye!")
+
+# Enregistrer les handlers de signaux
+if hasattr(signal, 'SIGTERM'):
+    signal.signal(signal.SIGTERM, signal_handler)
+if hasattr(signal, 'SIGINT'):
+    signal.signal(signal.SIGINT, signal_handler)
+
+# === DÉMARRAGE ===
+if __name__ == '__main__':
+    token = os.getenv("DISCORD_TOKEN")
+    if not token:
+        print("❌ DISCORD_TOKEN manquant dans les variables d'environnement!")
+        print("💡 Assurez-vous que la variable DISCORD_TOKEN est définie")
+        exit(1)
+    
+    print("🚀 Démarrage du Bot Alpine...")
+    print(f"🔧 Variables d'environnement:")
+    print(f"  - DISCORD_TOKEN: {'✅ Défini' if token else '❌ Manquant'}")
+    print(f"  - TWITCH_CLIENT_ID: {'✅ Défini' if os.getenv('TWITCH_CLIENT_ID') else '❌ Manquant'}")
+    print(f"  - TWITCH_CLIENT_SECRET: {'✅ Défini' if os.getenv('TWITCH_CLIENT_SECRET') else '❌ Manquant'}")
+    print(f"  - PORT: {'✅ ' + os.getenv('PORT') if os.getenv('PORT') else '❌ Non défini'}")
+    print("-" * 50)
+    
+    try:
+        bot.run(token)
+    except KeyboardInterrupt:
+        print("\n🛑 Arrêt manuel détecté...")
+    except Exception as e:
+        print(f"❌ ERREUR CRITIQUE lors du démarrage du bot: {e}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        print("👋 Bot arrêté!")
                     f"❌ Erreur lors de la création de l'événement: {str(e)}",
                     ephemeral=True
                 )
@@ -1018,6 +1391,7 @@ async def help_command(interaction: discord.Interaction):
 `/debug-bot` - Informations de debug 👑
 `/ping` - Tester la connexion
 `/helpalpine` - Afficher cette aide
+`/server-status` - Statut du serveur web 👑
     """
     embed.add_field(name="🔧 **Administration**", value=admin_commands.strip(), inline=False)
     
@@ -1040,6 +1414,96 @@ async def help_command(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed)
 
 # === COMMANDES ADMIN/DEBUG ===
+
+@bot.tree.command(name="server-status", description="Vérifier le statut du serveur web (admin)")
+async def server_status(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ Seuls les administrateurs peuvent utiliser cette commande!", ephemeral=True)
+        return
+    
+    global web_runner, web_site
+    
+    embed = discord.Embed(
+        title="🌐 Statut du Serveur Web",
+        color=0x00AE86,
+        timestamp=get_current_time()
+    )
+    
+    # Vérifier l'état du serveur
+    web_running = web_runner is not None and web_site is not None
+    port = os.getenv('PORT', 8080)
+    
+    embed.add_field(
+        name="🚀 Serveur Web",
+        value="✅ Actif" if web_running else "❌ Inactif",
+        inline=True
+    )
+    
+    embed.add_field(
+        name="🔌 Port",
+        value=f":{port}",
+        inline=True
+    )
+    
+    embed.add_field(
+        name="🌍 Endpoints",
+        value="• `/` - Status principal\n• `/health` - Santé\n• `/health.json` - JSON\n• `/ping` - Test simple",
+        inline=False
+    )
+    
+    # Test de connectivité interne
+    try:
+        # Simuler une requête interne
+        if web_running:
+            embed.add_field(
+                name="🔍 Test Interne",
+                value="✅ Serveur accessible",
+                inline=True
+            )
+        else:
+            embed.add_field(
+                name="🔍 Test Interne",
+                value="❌ Serveur non accessible",
+                inline=True
+            )
+    except Exception as e:
+        embed.add_field(
+            name="🔍 Test Interne",
+            value=f"❌ Erreur: {str(e)[:50]}...",
+            inline=True
+        )
+    
+    embed.add_field(
+        name="📊 Variables d'environnement",
+        value=f"PORT: {'✅ Défini' if os.getenv('PORT') else '❌ Non défini'}",
+        inline=False
+    )
+    
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@bot.tree.command(name="restart-webserver", description="Redémarrer le serveur web (admin)")
+async def restart_webserver(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ Seuls les administrateurs peuvent utiliser cette commande!", ephemeral=True)
+        return
+    
+    await interaction.response.defer(ephemeral=True)
+    
+    try:
+        # Arrêter le serveur existant
+        await stop_web_server()
+        await asyncio.sleep(2)
+        
+        # Redémarrer
+        success = await start_web_server()
+        
+        if success:
+            await interaction.followup.send("✅ Serveur web redémarré avec succès!", ephemeral=True)
+        else:
+            await interaction.followup.send("❌ Échec du redémarrage du serveur web!", ephemeral=True)
+            
+    except Exception as e:
+        await interaction.followup.send(f"❌ Erreur lors du redémarrage: {e}", ephemeral=True)
 
 @bot.tree.command(name="sync-commands", description="Synchroniser les commandes (admin seulement)")
 async def sync_commands(interaction: discord.Interaction):
@@ -1073,6 +1537,7 @@ async def notification_status(interaction: discord.Interaction):
     twitch_running = check_streams.is_running()
     status_text += f"🔄 **Système actif:** {'✅ OUI' if is_running else '❌ NON'}\n"
     status_text += f"📺 **Twitch actif:** {'✅ OUI (2min)' if twitch_running else '❌ NON'}\n"
+    status_text += f"🌐 **Serveur web:** {'✅ OUI' if web_runner is not None else '❌ NON'}\n"
     status_text += f"📊 **Événements totaux:** {len(events)}\n"
     status_text += f"🔔 **Dans le système de notif:** {len(notifications_sent)}\n"
     status_text += f"📡 **Streams suivis:** {sum(len(s) for s in streamers.values())}\n\n"
@@ -1143,153 +1608,4 @@ async def check_notifications(interaction: discord.Interaction):
         await notification_system.coro()
         await interaction.followup.send("✅ Vérification terminée! Consultez les logs.", ephemeral=True)
     except Exception as e:
-        await interaction.followup.send(f"❌ Erreur: {e}", ephemeral=True)
-        print(f"Erreur check notifications: {e}")
-
-@bot.tree.command(name="test-notification", description="Tester une notification (admin seulement)")
-@app_commands.describe(event_id="ID de l'événement à tester")
-async def test_notification(interaction: discord.Interaction, event_id: int):
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("❌ Seuls les administrateurs peuvent utiliser cette commande!", ephemeral=True)
-        return
-    
-    if event_id not in events:
-        await interaction.response.send_message(f"❌ Événement {event_id} introuvable!", ephemeral=True)
-        return
-    
-    event = events[event_id]
-    await interaction.response.send_message(f"🧪 Test de notification pour: {event.name}", ephemeral=True)
-    
-    # Tester notification 15min
-    success1 = await send_event_notification(event, 15)
-    
-    # Attendre 2 secondes puis tester notification live
-    await asyncio.sleep(2)
-    success2 = await send_event_notification(event, 0)
-    
-    result = f"Notification 15min: {'✅' if success1 else '❌'}\nNotification Live: {'✅' if success2 else '❌'}"
-    await interaction.followup.send(result, ephemeral=True)
-
-@bot.tree.command(name="debug-bot", description="Informations de debug du bot")
-async def debug_bot(interaction: discord.Interaction):
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("❌ Seuls les administrateurs peuvent utiliser cette commande!", ephemeral=True)
-        return
-    
-    debug_info = f"""**🔧 Debug Bot Info:**
-
-**Système de notifications:**
-- Actif: {'✅' if notification_system.is_running() else '❌'}
-- Prochaine exécution: {notification_system.next_iteration}
-
-**Système Twitch:**
-- Actif: {'✅ (2min)' if check_streams.is_running() else '❌'}
-- Token valide: {'✅' if twitch_api.token else '❌'}
-- Prochaine vérification: {check_streams.next_iteration}
-
-**Données:**
-- Événements: {len(events)}
-- Notifications tracked: {len(notifications_sent)}
-- Configurations rôles: {len(guild_role_configs)}
-- Streamers suivis: {sum(len(s) for s in streamers.values())}
-- Messages de stream actifs: {len(stream_messages)}
-
-**Bot:**
-- Connecté: {'✅' if bot.is_ready() else '❌'}
-- Latence: {round(bot.latency * 1000)}ms
-"""
-    
-    await interaction.response.send_message(debug_info, ephemeral=True)
-
-@bot.tree.command(name="ping", description="Réponds pong")
-async def ping(interaction: discord.Interaction):
-    await interaction.response.send_message("🏓 Pong !")
-
-# === EVENTS DU BOT ===
-
-@bot.event
-async def on_ready():
-    print(f"✅ Connecté en tant que {bot.user}")
-    
-    try:
-        # Attendre un peu pour être sûr que le bot est prêt
-        await asyncio.sleep(2)
-        
-        # Synchronisation des commandes
-        print(f"📋 Commandes enregistrées dans le bot:")
-        for cmd in bot.tree.get_commands():
-            print(f"  - {cmd.name}: {cmd.description}")
-        
-        print(f"🔄 Synchronisation des commandes avec Discord...")
-        
-        # Synchronisation globale ET locale pour être sûr
-        synced_global = await bot.tree.sync()
-        print(f'✅ {len(synced_global)} commandes synchronisées globalement!')
-        
-        # Synchronisation spécifique au serveur (optionnel mais peut aider)
-        try:
-            # Si vous voulez synchroniser pour un serveur spécifique, décommentez ces lignes :
-            # guild = discord.Object(id=VOTRE_GUILD_ID_ICI)
-            # synced_guild = await bot.tree.sync(guild=guild)
-            # print(f'✅ {len(synced_guild)} commandes synchronisées pour le serveur!')
-            pass
-        except Exception as e:
-            print(f"⚠️ Erreur synchronisation serveur: {e}")
-        
-        print(f"📤 Commandes synchronisées:")
-        for cmd in synced_global:
-            print(f"  - /{cmd.name}")
-        
-        # Initialiser l'API Twitch
-        await twitch_api.get_token()
-        
-        # Démarrer les systèmes de tâches
-        if not check_streams.is_running():
-            check_streams.start()
-            print("✅ Système de vérification Twitch démarré! (toutes les 2 minutes)")
-        
-        if not notification_system.is_running():
-            notification_system.start()
-            print("✅ Système de notifications démarré!")
-        
-        # Démarrer le serveur web si nécessaire
-        if os.getenv("PORT"):
-            asyncio.create_task(start_web_server())
-            
-        print("🚀 Bot complètement initialisé et prêt!")
-            
-    except Exception as e:
-        print(f"❌ Erreur lors de l'initialisation: {e}")
-        import traceback
-        traceback.print_exc()
-
-# Gestion des erreurs
-@bot.event
-async def on_error(event, *args, **kwargs):
-    print(f"Erreur dans {event}: {args} {kwargs}")
-
-@bot.event
-async def on_command_error(ctx, error):
-    print(f"Erreur de commande: {error}")
-
-@bot.tree.error
-async def on_app_command_error(interaction: discord.Interaction, error):
-    print(f"❌ Erreur de slash commande: {error}")
-    try:
-        if not interaction.response.is_done():
-            await interaction.response.send_message("❌ Une erreur est survenue lors de l'exécution de la commande.", ephemeral=True)
-        else:
-            await interaction.followup.send("❌ Une erreur est survenue lors de l'exécution de la commande.", ephemeral=True)
-    except Exception as e:
-        print(f"Erreur lors de l'envoi du message d'erreur: {e}")
-
-# === DÉMARRAGE ===
-if __name__ == '__main__':
-    token = os.getenv("DISCORD_TOKEN")
-    if token:
-        try:
-            bot.run(token)
-        except Exception as e:
-            print(f"❌ Erreur lors du démarrage du bot: {e}")
-    else:
-        print("❌ DISCORD_TOKEN manquant dans les variables d'environnement!")
+        await interaction.followup.send(
